@@ -211,11 +211,51 @@ func (c *GslbCore) PopIdFromIP(ip netip.Addr) string {
 }
 
 func (c *GslbCore) Query(srcIP netip.Addr) []netip.Addr {
+	// srcIP は DNS クエリを投げてきたクライアントの IP アドレス
+	// EDNS Client Subnet が指定されている場合は、その subnet の IP が入る
 	slog.Info("Query", slog.String("srcIP", srcIP.String()))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// FIXME(student): Implement your own query logic
-	return []netip.Addr{c.cfg.Pops[0].Ip4}
+	// まずsrcIPがどのregionに属するかを探す
+	var matchedRegion *RegionState
+
+	// c.regions には、各 region の情報と、その region から各 PoP への RTT が入っている
+	for _, region := range c.regions {
+		// region.info.Prefixes には、そのregionに属するIPアドレス範囲が入っている
+		// e.g. 198.51.100.0/28 など
+		for _, prefix := range region.info.Prefixes {
+			// srcIPがこのprefixに含まれていれば、このregionの利用者だと判断できる
+			if prefix.Contains(srcIP) {
+				matchedRegion = region
+				break
+			}
+		}
+
+		// regionが見つかったら外側のloopもここで止める
+		if matchedRegion != nil {
+			break
+		}
+	}
+
+	// どの region にもマッチしなかった場合のfallback
+	// 最初のPoPのIPを返す
+	if matchedRegion == nil {
+		return []netip.Addr{c.cfg.Pops[0].Ip4}
+	}
+
+	// 最良のPoPを探す
+	bestPopIndex := 0
+	bestLatency := matchedRegion.popLatency[0]
+
+	for i, latency := range matchedRegion.popLatency {
+		// RTT が小さいほど、そのregionから近いPoPと考える
+		if latency < bestLatency {
+			bestPopIndex = i
+			bestLatency = latency
+		}
+	}
+
+	return []netip.Addr{c.cfg.Pops[bestPopIndex].Ip4}
 }
