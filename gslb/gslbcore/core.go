@@ -245,17 +245,42 @@ func (c *GslbCore) Query(srcIP netip.Addr) []netip.Addr {
 		return []netip.Addr{c.cfg.Pops[0].Ip4}
 	}
 
-	// 最良のPoPを探す
-	bestPopIndex := 0
-	bestLatency := matchedRegion.popLatency[0]
+	// 最小RTTのPoPを探す
+	bestRTTPopIndex := 0
+	bestRTT := matchedRegion.popLatency[0]
 
 	for i, latency := range matchedRegion.popLatency {
 		// RTT が小さいほど、そのregionから近いPoPと考える
-		if latency < bestLatency {
-			bestPopIndex = i
-			bestLatency = latency
+		if latency < bestRTT {
+			bestRTTPopIndex = i
+			bestRTT = latency
 		}
 	}
 
-	return []netip.Addr{c.cfg.Pops[bestPopIndex].Ip4}
+	// 最速PoPから20ms以内を十分近いPoPとみなす
+	// その候補の中からloadが一番低いPoPを選ぶ、つまり空いているところを選ぶ。
+	const latencyAllowanceMs = 20.0
+
+	selectedPopIndex := bestRTTPopIndex
+	selectedLoad := c.popstate[bestRTTPopIndex].Load
+
+	for i, latency := range matchedRegion.popLatency {
+		// 最小RTTから20msより遅いPoPを候補から外す
+		if latency > bestRTT+latencyAllowanceMs {
+			continue
+		}
+
+		// status取得に失敗しているPoPをさける
+		if c.popstate[i].Error != "" {
+			continue
+		}
+
+		// 十分近い候補の中で、よりloadが低いPoPを選ぶ
+		if c.popstate[i].Load < selectedLoad {
+			selectedPopIndex = i
+			selectedLoad = c.popstate[i].Load
+		}
+	}
+
+	return []netip.Addr{c.cfg.Pops[selectedPopIndex].Ip4}
 }
