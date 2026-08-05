@@ -12,19 +12,24 @@ import (
 // Source: ../c/lb.c
 
 const (
-	DESTINATIONS_SIZE = 255 // ../c/lb.c:66
+	DESTINATIONS_SIZE = 255 // ../c/lb.c:86
 )
 
-type StatCounters struct { // ../c/lb.c:28
-	RxPacketTotal                uint64 // ../c/lb.c:29
-	RxTotalSize                  uint64 // ../c/lb.c:30
-	TooShortPacketTotal          uint64 // ../c/lb.c:32
-	NonIpv4PacketTotal           uint64 // ../c/lb.c:33
-	IpOptionPacketTotal          uint64 // ../c/lb.c:34
-	NonSupportedProtoPacketTotal uint64 // ../c/lb.c:35
-	NoVipMatchTotal              uint64 // ../c/lb.c:36
-	FailedAdjustHeadTotal        uint64 // ../c/lb.c:37
-	FailedAdjustTailTotal        uint64 // ../c/lb.c:38
+type StatCounters struct { // ../c/lb.c:37
+	RxPacketTotal                 uint64 // ../c/lb.c:38
+	RxTotalSize                   uint64 // ../c/lb.c:39
+	TooShortPacketTotal           uint64 // ../c/lb.c:41
+	UnsupportedNetworkPacketTotal uint64 // ../c/lb.c:42
+	Ipv4PacketTotal               uint64 // ../c/lb.c:43
+	Ipv6PacketTotal               uint64 // ../c/lb.c:44
+	IpOptionPacketTotal           uint64 // ../c/lb.c:45
+	NonSupportedProtoPacketTotal  uint64 // ../c/lb.c:46
+	NoVipMatchTotal               uint64 // ../c/lb.c:47
+	MtuExceededPacketTotal        uint64 // ../c/lb.c:48
+	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:49
+	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:50
+	FailedAdjustHeadTotal         uint64 // ../c/lb.c:51
+	FailedAdjustTailTotal         uint64 // ../c/lb.c:52
 }
 
 func StatCountersAssertLayout(s *DWARFStruct) error {
@@ -56,10 +61,20 @@ func StatCountersAssertLayout(s *DWARFStruct) error {
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go TooShortPacketTotal: %d, dwarf too_short_packet_total: %d", goff, doff)
 	}
-	goff = unsafe.Offsetof(StatCounters{}.NonIpv4PacketTotal)
-	doff = fs["non_ipv4_packet_total"].Offset
+	goff = unsafe.Offsetof(StatCounters{}.UnsupportedNetworkPacketTotal)
+	doff = fs["unsupported_network_packet_total"].Offset
 	if goff != uintptr(doff) {
-		return fmt.Errorf("offset mismatch: go NonIpv4PacketTotal: %d, dwarf non_ipv4_packet_total: %d", goff, doff)
+		return fmt.Errorf("offset mismatch: go UnsupportedNetworkPacketTotal: %d, dwarf unsupported_network_packet_total: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(StatCounters{}.Ipv4PacketTotal)
+	doff = fs["ipv4_packet_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go Ipv4PacketTotal: %d, dwarf ipv4_packet_total: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(StatCounters{}.Ipv6PacketTotal)
+	doff = fs["ipv6_packet_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go Ipv6PacketTotal: %d, dwarf ipv6_packet_total: %d", goff, doff)
 	}
 	goff = unsafe.Offsetof(StatCounters{}.IpOptionPacketTotal)
 	doff = fs["ip_option_packet_total"].Offset
@@ -75,6 +90,21 @@ func StatCountersAssertLayout(s *DWARFStruct) error {
 	doff = fs["no_vip_match_total"].Offset
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go NoVipMatchTotal: %d, dwarf no_vip_match_total: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(StatCounters{}.MtuExceededPacketTotal)
+	doff = fs["mtu_exceeded_packet_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go MtuExceededPacketTotal: %d, dwarf mtu_exceeded_packet_total: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(StatCounters{}.Icmpv4FragNeededTotal)
+	doff = fs["icmpv4_frag_needed_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go Icmpv4FragNeededTotal: %d, dwarf icmpv4_frag_needed_total: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(StatCounters{}.Icmpv6PacketTooBigTotal)
+	doff = fs["icmpv6_packet_too_big_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go Icmpv6PacketTooBigTotal: %d, dwarf icmpv6_packet_too_big_total: %d", goff, doff)
 	}
 	goff = unsafe.Offsetof(StatCounters{}.FailedAdjustHeadTotal)
 	doff = fs["failed_adjust_head_total"].Offset
@@ -94,10 +124,15 @@ func (c *StatCounters) Add(other *StatCounters) {
 	c.RxPacketTotal += other.RxPacketTotal
 	c.RxTotalSize += other.RxTotalSize
 	c.TooShortPacketTotal += other.TooShortPacketTotal
-	c.NonIpv4PacketTotal += other.NonIpv4PacketTotal
+	c.UnsupportedNetworkPacketTotal += other.UnsupportedNetworkPacketTotal
+	c.Ipv4PacketTotal += other.Ipv4PacketTotal
+	c.Ipv6PacketTotal += other.Ipv6PacketTotal
 	c.IpOptionPacketTotal += other.IpOptionPacketTotal
 	c.NonSupportedProtoPacketTotal += other.NonSupportedProtoPacketTotal
 	c.NoVipMatchTotal += other.NoVipMatchTotal
+	c.MtuExceededPacketTotal += other.MtuExceededPacketTotal
+	c.Icmpv4FragNeededTotal += other.Icmpv4FragNeededTotal
+	c.Icmpv6PacketTooBigTotal += other.Icmpv6PacketTooBigTotal
 	c.FailedAdjustHeadTotal += other.FailedAdjustHeadTotal
 	c.FailedAdjustTailTotal += other.FailedAdjustTailTotal
 }
@@ -114,8 +149,14 @@ func (c *StatCounters) String() string {
 	if c.TooShortPacketTotal != 0 {
 		buf.WriteString(fmt.Sprintf("TooShortPacketTotal=%d, ", c.TooShortPacketTotal))
 	}
-	if c.NonIpv4PacketTotal != 0 {
-		buf.WriteString(fmt.Sprintf("NonIpv4PacketTotal=%d, ", c.NonIpv4PacketTotal))
+	if c.UnsupportedNetworkPacketTotal != 0 {
+		buf.WriteString(fmt.Sprintf("UnsupportedNetworkPacketTotal=%d, ", c.UnsupportedNetworkPacketTotal))
+	}
+	if c.Ipv4PacketTotal != 0 {
+		buf.WriteString(fmt.Sprintf("Ipv4PacketTotal=%d, ", c.Ipv4PacketTotal))
+	}
+	if c.Ipv6PacketTotal != 0 {
+		buf.WriteString(fmt.Sprintf("Ipv6PacketTotal=%d, ", c.Ipv6PacketTotal))
 	}
 	if c.IpOptionPacketTotal != 0 {
 		buf.WriteString(fmt.Sprintf("IpOptionPacketTotal=%d, ", c.IpOptionPacketTotal))
@@ -125,6 +166,15 @@ func (c *StatCounters) String() string {
 	}
 	if c.NoVipMatchTotal != 0 {
 		buf.WriteString(fmt.Sprintf("NoVipMatchTotal=%d, ", c.NoVipMatchTotal))
+	}
+	if c.MtuExceededPacketTotal != 0 {
+		buf.WriteString(fmt.Sprintf("MtuExceededPacketTotal=%d, ", c.MtuExceededPacketTotal))
+	}
+	if c.Icmpv4FragNeededTotal != 0 {
+		buf.WriteString(fmt.Sprintf("Icmpv4FragNeededTotal=%d, ", c.Icmpv4FragNeededTotal))
+	}
+	if c.Icmpv6PacketTooBigTotal != 0 {
+		buf.WriteString(fmt.Sprintf("Icmpv6PacketTooBigTotal=%d, ", c.Icmpv6PacketTooBigTotal))
 	}
 	if c.FailedAdjustHeadTotal != 0 {
 		buf.WriteString(fmt.Sprintf("FailedAdjustHeadTotal=%d, ", c.FailedAdjustHeadTotal))
@@ -139,9 +189,11 @@ func (c *StatCounters) String() string {
 	return buf.String()
 }
 
-type LbConfig struct { // ../c/lb.c:49
-	VipAddress uint32 // ../c/lb.c:50
-	NumDests   uint32 // ../c/lb.c:51
+type LbConfig struct { // ../c/lb.c:65
+	Vip4Address uint32    // ../c/lb.c:66
+	Vip6Address [16]uint8 // ../c/lb.c:67
+	NumDests    uint32    // ../c/lb.c:68
+	InnerMtu    uint32    // ../c/lb.c:69
 }
 
 func LbConfigAssertLayout(s *DWARFStruct) error {
@@ -158,15 +210,25 @@ func LbConfigAssertLayout(s *DWARFStruct) error {
 
 	var goff uintptr
 	var doff int64
-	goff = unsafe.Offsetof(LbConfig{}.VipAddress)
-	doff = fs["vip_address"].Offset
+	goff = unsafe.Offsetof(LbConfig{}.Vip4Address)
+	doff = fs["vip4_address"].Offset
 	if goff != uintptr(doff) {
-		return fmt.Errorf("offset mismatch: go VipAddress: %d, dwarf vip_address: %d", goff, doff)
+		return fmt.Errorf("offset mismatch: go Vip4Address: %d, dwarf vip4_address: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(LbConfig{}.Vip6Address)
+	doff = fs["vip6_address"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go Vip6Address: %d, dwarf vip6_address: %d", goff, doff)
 	}
 	goff = unsafe.Offsetof(LbConfig{}.NumDests)
 	doff = fs["num_dests"].Offset
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go NumDests: %d, dwarf num_dests: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(LbConfig{}.InnerMtu)
+	doff = fs["inner_mtu"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go InnerMtu: %d, dwarf inner_mtu: %d", goff, doff)
 	}
 
 	return nil

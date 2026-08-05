@@ -2,7 +2,6 @@ package l4lbdrv
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -19,8 +18,10 @@ type Config struct {
 	BinPath        string
 	InterfaceName  string
 	XdpCapHookPath string
+	UnderlayMTU    uint32
 
-	VIP   netip.Addr
+	VIP4  netip.Addr
+	VIP6  netip.Addr
 	Dests DestinationEntries
 }
 
@@ -32,6 +33,9 @@ type L4LB struct {
 }
 
 func New(cfg *Config) (*L4LB, error) {
+	if _, err := cfg.InnerMTU(); err != nil {
+		return nil, err
+	}
 	if err := PrepSystemForXDP(); err != nil {
 		return nil, fmt.Errorf("Failed to prep system for XDP: %w", err)
 	}
@@ -82,9 +86,22 @@ func New(cfg *Config) (*L4LB, error) {
 
 var hostOrder = binary.LittleEndian
 
+const outerIPv6HeaderLen = uint32(40)
+
+// InnerMTU returns the largest original client IP packet that can be wrapped
+// in one outer IPv6 header without exceeding the configured underlay MTU.
+func (cfg *Config) InnerMTU() (uint32, error) {
+	// An IPv6-in-IPv6 deployment needs room for IPv6's minimum 1280-byte MTU
+	// plus the 40-byte outer IPv6 header.
+	if cfg.UnderlayMTU < 1320 || cfg.UnderlayMTU > 65535 {
+		return 0, fmt.Errorf("underlay MTU must be between 1320 and 65535: %d", cfg.UnderlayMTU)
+	}
+	return cfg.UnderlayMTU - outerIPv6HeaderLen, nil
+}
+
 func IPToUint32(ip netip.Addr) (uint32, error) {
 	if !ip.Is4() {
-		return 0, errors.New("Given IP is not an IPv4 address.")
+		return 0, fmt.Errorf("given IP is not an IPv4 address: %s", ip)
 	}
 
 	ip4 := ip.As4()
@@ -92,14 +109,28 @@ func IPToUint32(ip netip.Addr) (uint32, error) {
 }
 
 func (lb *L4LB) Sync() error {
-	vip4, err := IPToUint32(lb.cfg.VIP)
+	if len(lb.cfg.Dests) < 2 {
+		return fmt.Errorf("at least one cache destination is required")
+	}
+
+	vip4, err := IPToUint32(lb.cfg.VIP4)
 	if err != nil {
-		return fmt.Errorf("vip: %w", err)
+		return fmt.Errorf("IPv4 VIP: %w", err)
+	}
+	if !lb.cfg.VIP6.Is6() {
+		return fmt.Errorf("IPv6 VIP is not an IPv6 address: %s", lb.cfg.VIP6)
+	}
+	vip6 := lb.cfg.VIP6.As16()
+	innerMTU, err := lb.cfg.InnerMTU()
+	if err != nil {
+		return err
 	}
 
 	err = lb.bindings.ConfigMap.Update(uint32(0), &LbConfig{
-		VipAddress: vip4,
-		NumDests:   uint32(len(lb.cfg.Dests) - 1),
+		Vip4Address: vip4,
+		Vip6Address: vip6,
+		NumDests:    uint32(len(lb.cfg.Dests) - 1),
+		InnerMtu:    innerMTU,
 	}, 0)
 	if err != nil {
 		return fmt.Errorf("Failed to update ConfigMap: %w", err)

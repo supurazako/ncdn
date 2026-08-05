@@ -142,29 +142,32 @@ func NowNanoseconds() uint64 {
 }
 
 type DestinationEntry struct {
-	IPAddr       netip.Addr
+	IPv6Addr     netip.Addr
 	HardwareAddr net.HardwareAddr
 }
 
 func (e DestinationEntry) String() string {
-	return fmt.Sprintf("{IPAddr: %v, HardwareAddr: %v}", e.IPAddr, e.HardwareAddr)
+	return fmt.Sprintf("{IPv6Addr: %v, HardwareAddr: %v}", e.IPv6Addr, e.HardwareAddr)
 }
 
 type DestinationEntries []DestinationEntry
 
-const DestinationEntrySize = 10
+const DestinationEntrySize = 22
 
 func (es DestinationEntries) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, len(es)*DestinationEntrySize)
 	bs := buf
 
 	for _, e := range es {
-		if e.IPAddr.Is6() {
-			return nil, fmt.Errorf("destination must be ipv4 address, but was %s", e.IPAddr)
-		} else {
-			ip4 := e.IPAddr.As4()
-			copy(bs[0:4], ip4[:])
-			bs = bs[4:]
+		if !e.IPv6Addr.Is6() {
+			return nil, fmt.Errorf("destination must contain an IPv6 address, but was %s", e.IPv6Addr)
+		}
+		ip6 := e.IPv6Addr.As16()
+		copy(bs[0:16], ip6[:])
+		bs = bs[16:]
+
+		if len(e.HardwareAddr) != 6 {
+			return nil, fmt.Errorf("destination must contain a 6-byte MAC address, but was %s", e.HardwareAddr)
 		}
 		copy(bs[0:6], e.HardwareAddr)
 		bs = bs[6:]
