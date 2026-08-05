@@ -257,9 +257,9 @@ func (c *GslbCore) Query(srcIP netip.Addr) []netip.Addr {
 		}
 	}
 
-	// 最速PoPから20ms以内を十分近いPoPとみなす
+	// 最速PoPから150ms以内を十分近いPoPとみなす
 	// その候補の中からloadが一番低いPoPを選ぶ、つまり空いているところを選ぶ。
-	const latencyAllowanceMs = 20.0
+	const latencyAllowanceMs = 150.0
 
 	selectedPopIndex := bestRTTPopIndex
 	selectedLoad := c.popstate[bestRTTPopIndex].Load
