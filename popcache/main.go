@@ -17,6 +17,8 @@ var originURLStr = flag.String("originURL", "http://localhost:8888", "Origin ser
 var listenAddr = flag.String("listenAddr", ":8889", "Address to listen on")
 var nodeId = flag.String("nodeId", "unknown_node", "Name of the node")
 var cacheTTL = flag.Duration("cacheTTL", 30*time.Second, "Cache entry TTL")
+var cacheMaxBytes = flag.Int64("cacheMaxBytes", 64<<20, "Maximum cache size in bytes")
+var cacheMaxObjectBytes = flag.Int64("cacheMaxObjectBytes", 8<<20, "Maximum cached object size in bytes")
 
 func main() {
 	flag.Parse()
@@ -27,17 +29,26 @@ func main() {
 	}
 
 	start := time.Now()
-	cache := newMemoryCache()
+	cache, err := newMemoryCache(*cacheMaxBytes, *cacheMaxObjectBytes)
+	if err != nil {
+		log.Fatalf("Invalid cache size: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	rps := httprps.NewMiddleware(mux)
 	http.Handle("/", rps)
 
 	mux.HandleFunc("/statusz", func(w http.ResponseWriter, r *http.Request) {
-		s := types.PoPStatus{
-			Id:     *nodeId,
-			Uptime: time.Since(start).Seconds(),
-			Load:   rps.GetRPS(),
+		s := struct {
+			types.PoPStatus
+			Cache cacheStats `json:"cache"`
+		}{
+			PoPStatus: types.PoPStatus{
+				Id:     *nodeId,
+				Uptime: time.Since(start).Seconds(),
+				Load:   rps.GetRPS(),
+			},
+			Cache: cache.stats(),
 		}
 		bs, err := json.MarshalIndent(s, "", "  ")
 		if err != nil {
