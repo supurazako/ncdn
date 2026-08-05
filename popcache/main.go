@@ -16,6 +16,7 @@ import (
 var originURLStr = flag.String("originURL", "http://localhost:8888", "Origin server URL")
 var listenAddr = flag.String("listenAddr", ":8889", "Address to listen on")
 var nodeId = flag.String("nodeId", "unknown_node", "Name of the node")
+var cacheTTL = flag.Duration("cacheTTL", 30*time.Second, "Cache entry TTL")
 
 func main() {
 	flag.Parse()
@@ -26,6 +27,7 @@ func main() {
 	}
 
 	start := time.Now()
+	cache := newMemoryCache()
 
 	mux := http.NewServeMux()
 	rps := httprps.NewMiddleware(mux)
@@ -54,7 +56,7 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.Handle("/", &httputil.ReverseProxy{
-		// FIXME: actually cache stuff...
+		Transport: newCachingTransport(nil, cache, *cacheTTL),
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetXForwarded()
 			r.Out.Header.Set("X-NCDN-PoPCache-NodeId", *nodeId)
