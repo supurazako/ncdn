@@ -32,7 +32,7 @@ func TestCachingTransportReturnsCachedResponse(t *testing.T) {
 
 	transport := newCachingTransport(
 		origin,
-		newMemoryCache(),
+		mustNewMemoryCache(t, 1024, 512),
 		time.Minute,
 	)
 
@@ -71,7 +71,7 @@ func TestCachingTransportDoesNotCachePost(t *testing.T) {
 
 	transport := newCachingTransport(
 		origin,
-		newMemoryCache(),
+		mustNewMemoryCache(t, 1024, 512),
 		time.Minute,
 	)
 
@@ -80,6 +80,45 @@ func TestCachingTransportDoesNotCachePost(t *testing.T) {
 
 	if originRequests != 2 {
 		t.Fatalf("origin requests: got %d, want 2", originRequests)
+	}
+}
+
+func TestCachingTransportStreamsLargeResponseWithoutCaching(t *testing.T) {
+	originRequests := 0
+	body := strings.Repeat("x", 256)
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		originRequests++
+
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Status:        "200 OK",
+			Header:        make(http.Header),
+			Body:          io.NopCloser(strings.NewReader(body)),
+			ContentLength: -1,
+			Request:       req,
+		}, nil
+	})
+	cache := mustNewMemoryCache(t, 128, 64)
+	transport := newCachingTransport(origin, cache, time.Minute)
+
+	first := performRequest(t, transport, http.MethodGet)
+	second := performRequest(t, transport, http.MethodGet)
+
+	if first.body != body || second.body != body {
+		t.Fatal("large response was not streamed completely")
+	}
+	if first.cacheStatus != "MISS" || second.cacheStatus != "MISS" {
+		t.Fatalf(
+			"large response cache status: first=%q second=%q",
+			first.cacheStatus,
+			second.cacheStatus,
+		)
+	}
+	if originRequests != 2 {
+		t.Fatalf("origin requests: got %d, want 2", originRequests)
+	}
+	if stats := cache.stats(); stats.Entries != 0 || stats.UsedBytes != 0 {
+		t.Fatalf("large response changed cache stats: %+v", stats)
 	}
 }
 
