@@ -174,10 +174,10 @@ function read_xdp_metadata() {
     link_json=$(sudo ip netns exec LB ip -json link show net0)
     xdp_mode_num=$(jq -r '.[0].xdp.mode // 0' <<<"${link_json}")
     if [ "${xdp_mode_num}" = "1" ]; then
-        XDP_ATTACH_MODE=generic
-    elif [ "${xdp_mode_num}" = "2" ]; then
         XDP_ATTACH_MODE=driver
-    elif [ "${xdp_mode_num}" = "4" ]; then
+    elif [ "${xdp_mode_num}" = "2" ]; then
+        XDP_ATTACH_MODE=generic
+    elif [ "${xdp_mode_num}" = "3" ]; then
         XDP_ATTACH_MODE=offload
     fi
     INTERFACE_TYPE=$(jq -r '.[0].link_type // "unknown"' <<<"${link_json}")
