@@ -1,12 +1,14 @@
 package l4lbdrv
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"math"
 	"net/netip"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"github.com/cilium/ebpf"
@@ -27,6 +29,7 @@ type Config struct {
 
 type L4LB struct {
 	cfg *Config
+	mu  sync.Mutex
 
 	bindings     *Bindings
 	linkAttacher *LinkAttacher
@@ -109,8 +112,54 @@ func IPToUint32(ip netip.Addr) (uint32, error) {
 }
 
 func (lb *L4LB) Sync() error {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
 	if len(lb.cfg.Dests) < 2 {
 		return fmt.Errorf("at least one cache destination is required")
+	}
+	return lb.syncDestinationsLocked(lb.cfg.Dests)
+}
+
+// UpdateDestinations replaces the active cache destinations without reloading
+// the XDP program. Entry zero must remain the L4LB itself; an empty cache set is
+// represented by a slice containing only that entry.
+func (lb *L4LB) UpdateDestinations(dests DestinationEntries) error {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	if len(dests) < 1 {
+		return fmt.Errorf("L4LB destination is required")
+	}
+	if len(dests) > DESTINATIONS_SIZE+1 {
+		return fmt.Errorf(
+			"too many cache destinations: %d > %d",
+			len(dests)-1,
+			DESTINATIONS_SIZE,
+		)
+	}
+	if dests[0].IPv6Addr != lb.cfg.Dests[0].IPv6Addr ||
+		!bytes.Equal(dests[0].HardwareAddr, lb.cfg.Dests[0].HardwareAddr) {
+		return fmt.Errorf("L4LB destination at index zero must not change")
+	}
+	if err := lb.syncDestinationsLocked(dests); err != nil {
+		return err
+	}
+
+	lb.cfg.Dests = cloneDestinationEntries(dests)
+	return nil
+}
+
+func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
+	if len(dests) < 1 {
+		return fmt.Errorf("L4LB destination is required")
+	}
+	if len(dests) > DESTINATIONS_SIZE+1 {
+		return fmt.Errorf(
+			"too many cache destinations: %d > %d",
+			len(dests)-1,
+			DESTINATIONS_SIZE,
+		)
 	}
 
 	vip4, err := IPToUint32(lb.cfg.VIP4)
@@ -126,27 +175,36 @@ func (lb *L4LB) Sync() error {
 		return err
 	}
 
+	keys := make([]uint32, len(dests))
+	for i := range keys {
+		keys[i] = uint32(i)
+	}
+
+	_, err = lb.bindings.DestinationArray.BatchUpdate(keys, dests, &ebpf.BatchOptions{})
+	if err != nil {
+		return fmt.Errorf("Failed to update DestinationArray: %w", err)
+	}
+
 	err = lb.bindings.ConfigMap.Update(uint32(0), &LbConfig{
 		Vip4Address: vip4,
 		Vip6Address: vip6,
-		NumDests:    uint32(len(lb.cfg.Dests) - 1),
+		NumDests:    uint32(len(dests) - 1),
 		InnerMtu:    innerMTU,
 	}, 0)
 	if err != nil {
 		return fmt.Errorf("Failed to update ConfigMap: %w", err)
 	}
 
-	keys := make([]uint32, len(lb.cfg.Dests))
-	for i := range keys {
-		keys[i] = uint32(i)
-	}
-
-	_, err = lb.bindings.DestinationArray.BatchUpdate(keys, lb.cfg.Dests, &ebpf.BatchOptions{})
-	if err != nil {
-		return fmt.Errorf("Failed to update DestinationArray: %w", err)
-	}
-
 	return nil
+}
+
+func cloneDestinationEntries(dests DestinationEntries) DestinationEntries {
+	cloned := make(DestinationEntries, len(dests))
+	for i, dest := range dests {
+		cloned[i] = dest
+		cloned[i].HardwareAddr = append([]byte(nil), dest.HardwareAddr...)
+	}
+	return cloned
 }
 
 func (lb *L4LB) Close() error {

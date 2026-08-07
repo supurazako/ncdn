@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -23,6 +25,11 @@ var vip4 = flag.String("vip", "192.0.2.10", "IPv4 VIP address to load balance")
 var vip6 = flag.String("vip6", "2001:db8:100::10", "IPv6 VIP address to load balance")
 var deststr = flag.String("dests", "", "Comma separated list of destination IPv6 and MAC addresses. (Example: 2001:db8::10;00:00:5e:00:53:01,)")
 var underlayMTU = flag.Uint("underlayMTU", 0, "Required MTU of the IPv6 path from the L4LB to cache nodes")
+var healthCheckInterval = flag.Duration("healthCheckInterval", time.Second, "Interval between cache destination health checks")
+var healthCheckTimeout = flag.Duration("healthCheckTimeout", 300*time.Millisecond, "Timeout for each cache destination health check")
+var healthCheckFailures = flag.Int("healthCheckFailures", 3, "Consecutive health check failures before removing a cache destination")
+var healthCheckSuccesses = flag.Int("healthCheckSuccesses", 2, "Consecutive health check successes before restoring a cache destination")
+var healthCheckPort = flag.Uint("healthCheckPort", 8889, "Cache destination health check port")
 
 func parseDest(deststr string) ([]l4lbdrv.DestinationEntry, error) {
 	commas := strings.Split(deststr, ",")
@@ -60,6 +67,21 @@ func main() {
 	if *underlayMTU > 65535 {
 		log.Fatalf("Invalid underlay MTU: %d", *underlayMTU)
 	}
+	if *healthCheckInterval <= 0 {
+		log.Fatalf("Invalid health check interval: %s", *healthCheckInterval)
+	}
+	if *healthCheckTimeout <= 0 {
+		log.Fatalf("Invalid health check timeout: %s", *healthCheckTimeout)
+	}
+	if *healthCheckPort > 65535 {
+		log.Fatalf("Invalid health check port: %d", *healthCheckPort)
+	}
+	if *healthCheckFailures <= 0 {
+		log.Fatalf("Invalid health check failure threshold: %d", *healthCheckFailures)
+	}
+	if *healthCheckSuccesses <= 0 {
+		log.Fatalf("Invalid health check success threshold: %d", *healthCheckSuccesses)
+	}
 
 	dests, err := parseDest(*deststr)
 	if err != nil {
@@ -81,16 +103,44 @@ func main() {
 	}
 	slog.Info("L4LB started.")
 	defer lb.Close()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	defer transport.CloseIdleConnections()
+	checker, err := newHealthChecker(
+		lb,
+		dests,
+		httpBackendProbe(&http.Client{
+			Transport: transport,
+			Timeout:   *healthCheckTimeout,
+		}, uint16(*healthCheckPort)),
+		*healthCheckFailures,
+		*healthCheckSuccesses,
+	)
+	if err != nil {
+		log.Fatalf("Invalid health check configuration: %v", err)
+	}
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 
-	ticker := time.NewTicker(time.Second)
+	counterTicker := time.NewTicker(time.Second)
+	defer counterTicker.Stop()
+	healthTicker := time.NewTicker(*healthCheckInterval)
+	defer healthTicker.Stop()
+	if err := checker.check(context.Background()); err != nil {
+		slog.Error("Failed to update cache destinations", "err", err)
+	}
 	for {
 		select {
-		case <-ticker.C:
+		case <-counterTicker.C:
 			if err := lb.DumpCounters(); err != nil {
 				slog.Error("Failed to dump counters", slog.String("err", err.Error()))
+			}
+			continue
+
+		case <-healthTicker.C:
+			if err := checker.check(context.Background()); err != nil {
+				slog.Error("Failed to update cache destinations", "err", err)
 			}
 			continue
 

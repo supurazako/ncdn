@@ -218,6 +218,40 @@ func TestL4LBIPv6InIPv6(t *testing.T) {
 	}
 }
 
+func TestL4LBUpdateDestinationsDropsWhenNoneAreHealthy(t *testing.T) {
+	vip4 := netip.MustParseAddr("192.0.2.10")
+	lbMAC := []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xfe}
+	lb := newTestLB(t, vip4, netip.MustParseAddr("2001:db8:100::10"), lbMAC)
+	defer lb.Close()
+
+	originalDestinations := cloneDestinationEntries(lb.cfg.Dests)
+	if err := lb.UpdateDestinations(originalDestinations[:1]); err != nil {
+		t.Fatalf("Failed to remove cache destinations: %v", err)
+	}
+	if err := lb.bindings.ResetStatCounters(); err != nil {
+		t.Fatalf("Failed to ResetStatCounters: %v", err)
+	}
+	if got := runIPv4TCPPacket(t, lb, vip4, lbMAC); got != XDP_DROP {
+		t.Fatalf("XDP action without healthy destinations = %s, want XDP_DROP",
+			XdpRetValToString(got))
+	}
+	counters, err := lb.bindings.ReadStatCountersAggregate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.NoHealthyDestinationTotal != 1 {
+		t.Fatalf("unexpected counters: %s", counters)
+	}
+
+	if err := lb.UpdateDestinations(originalDestinations); err != nil {
+		t.Fatalf("Failed to restore cache destination: %v", err)
+	}
+	if got := runIPv4TCPPacket(t, lb, vip4, lbMAC); got != XDP_TX {
+		t.Fatalf("XDP action after recovery = %s, want XDP_TX",
+			XdpRetValToString(got))
+	}
+}
+
 func TestL4LBUnsupportedVIPProtocolPolicy(t *testing.T) {
 	vip4 := netip.MustParseAddr("192.0.2.10")
 	vip6 := netip.MustParseAddr("2001:db8:100::10")
@@ -525,6 +559,48 @@ func runUDPPacket(t *testing.T, lb *L4LB, src, dst netip.Addr, lbMAC []byte) uin
 	retval, _, err := lb.bindings.LBMain.Test(buf.Bytes())
 	if err != nil {
 		t.Fatalf("Failed to execute XDP program: %v", err)
+	}
+	return retval
+}
+
+func runIPv4TCPPacket(
+	t *testing.T,
+	lb *L4LB,
+	dst netip.Addr,
+	lbMAC []byte,
+) uint32 {
+	t.Helper()
+
+	eth := &layers.Ethernet{
+		SrcMAC:       []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xff},
+		DstMAC:       lbMAC,
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	ip4 := &layers.IPv4{
+		SrcIP:    netip.MustParseAddr("10.0.0.123").AsSlice(),
+		DstIP:    dst.AsSlice(),
+		Version:  4,
+		TTL:      64,
+		Protocol: layers.IPProtocolTCP,
+	}
+	tcp := &layers.TCP{SrcPort: 12345, DstPort: 8889, SYN: true}
+	if err := tcp.SetNetworkLayerForChecksum(ip4); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := gopacket.NewSerializeBuffer()
+	if err := gopacket.SerializeLayers(
+		buf,
+		gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true},
+		eth,
+		ip4,
+		tcp,
+	); err != nil {
+		t.Fatal(err)
+	}
+	retval, _, err := lb.bindings.LBMain.Test(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
 	}
 	return retval
 }

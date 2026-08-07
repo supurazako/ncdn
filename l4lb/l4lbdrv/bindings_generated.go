@@ -12,7 +12,7 @@ import (
 // Source: ../c/lb.c
 
 const (
-	DESTINATIONS_SIZE = 255 // ../c/lb.c:86
+	DESTINATIONS_SIZE = 255 // ../c/lb.c:87
 )
 
 type StatCounters struct { // ../c/lb.c:37
@@ -25,11 +25,12 @@ type StatCounters struct { // ../c/lb.c:37
 	IpOptionPacketTotal           uint64 // ../c/lb.c:45
 	NonSupportedProtoPacketTotal  uint64 // ../c/lb.c:46
 	NoVipMatchTotal               uint64 // ../c/lb.c:47
-	MtuExceededPacketTotal        uint64 // ../c/lb.c:48
-	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:49
-	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:50
-	FailedAdjustHeadTotal         uint64 // ../c/lb.c:51
-	FailedAdjustTailTotal         uint64 // ../c/lb.c:52
+	NoHealthyDestinationTotal     uint64 // ../c/lb.c:48
+	MtuExceededPacketTotal        uint64 // ../c/lb.c:49
+	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:50
+	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:51
+	FailedAdjustHeadTotal         uint64 // ../c/lb.c:52
+	FailedAdjustTailTotal         uint64 // ../c/lb.c:53
 }
 
 func StatCountersAssertLayout(s *DWARFStruct) error {
@@ -91,6 +92,11 @@ func StatCountersAssertLayout(s *DWARFStruct) error {
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go NoVipMatchTotal: %d, dwarf no_vip_match_total: %d", goff, doff)
 	}
+	goff = unsafe.Offsetof(StatCounters{}.NoHealthyDestinationTotal)
+	doff = fs["no_healthy_destination_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go NoHealthyDestinationTotal: %d, dwarf no_healthy_destination_total: %d", goff, doff)
+	}
 	goff = unsafe.Offsetof(StatCounters{}.MtuExceededPacketTotal)
 	doff = fs["mtu_exceeded_packet_total"].Offset
 	if goff != uintptr(doff) {
@@ -130,6 +136,7 @@ func (c *StatCounters) Add(other *StatCounters) {
 	c.IpOptionPacketTotal += other.IpOptionPacketTotal
 	c.NonSupportedProtoPacketTotal += other.NonSupportedProtoPacketTotal
 	c.NoVipMatchTotal += other.NoVipMatchTotal
+	c.NoHealthyDestinationTotal += other.NoHealthyDestinationTotal
 	c.MtuExceededPacketTotal += other.MtuExceededPacketTotal
 	c.Icmpv4FragNeededTotal += other.Icmpv4FragNeededTotal
 	c.Icmpv6PacketTooBigTotal += other.Icmpv6PacketTooBigTotal
@@ -167,6 +174,9 @@ func (c *StatCounters) String() string {
 	if c.NoVipMatchTotal != 0 {
 		buf.WriteString(fmt.Sprintf("NoVipMatchTotal=%d, ", c.NoVipMatchTotal))
 	}
+	if c.NoHealthyDestinationTotal != 0 {
+		buf.WriteString(fmt.Sprintf("NoHealthyDestinationTotal=%d, ", c.NoHealthyDestinationTotal))
+	}
 	if c.MtuExceededPacketTotal != 0 {
 		buf.WriteString(fmt.Sprintf("MtuExceededPacketTotal=%d, ", c.MtuExceededPacketTotal))
 	}
@@ -189,11 +199,11 @@ func (c *StatCounters) String() string {
 	return buf.String()
 }
 
-type LbConfig struct { // ../c/lb.c:65
-	Vip4Address uint32    // ../c/lb.c:66
-	Vip6Address [16]uint8 // ../c/lb.c:67
-	NumDests    uint32    // ../c/lb.c:68
-	InnerMtu    uint32    // ../c/lb.c:69
+type LbConfig struct { // ../c/lb.c:66
+	Vip4Address uint32    // ../c/lb.c:67
+	Vip6Address [16]uint8 // ../c/lb.c:68
+	NumDests    uint32    // ../c/lb.c:69
+	InnerMtu    uint32    // ../c/lb.c:70
 }
 
 func LbConfigAssertLayout(s *DWARFStruct) error {
