@@ -88,6 +88,68 @@ func TestCachingTransportDoesNotCachePost(t *testing.T) {
 	}
 }
 
+func TestCachingTransportDoesNotCachePrivateResponse(t *testing.T) {
+	tests := []struct {
+		name   string
+		header http.Header
+	}{
+		{
+			name: "Cache-Control no-store",
+			header: http.Header{
+				"Cache-Control": {"public, no-store"},
+			},
+		},
+		{
+			name: "Cache-Control private is case-insensitive",
+			header: http.Header{
+				"Cache-Control": {"max-age=60, PRIVATE"},
+			},
+		},
+		{
+			name: "Set-Cookie",
+			header: http.Header{
+				"Set-Cookie": {"session_id=secret"},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			originRequests := 0
+			origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				originRequests++
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     test.header.Clone(),
+					Body:       io.NopCloser(strings.NewReader("from origin")),
+					Request:    req,
+				}, nil
+			})
+			cache := mustNewMemoryCache(t, 1024, 512)
+			transport := newCachingTransport(origin, cache, time.Minute)
+
+			first := performRequest(t, transport, http.MethodGet)
+			second := performRequest(t, transport, http.MethodGet)
+
+			if first.cacheStatus != "MISS" || second.cacheStatus != "MISS" {
+				t.Fatalf(
+					"cache status: first=%q second=%q, want both MISS",
+					first.cacheStatus,
+					second.cacheStatus,
+				)
+			}
+			if originRequests != 2 {
+				t.Fatalf("origin requests: got %d, want 2", originRequests)
+			}
+			if stats := cache.stats(); stats.Entries != 0 {
+				t.Fatalf("private response was cached: %+v", stats)
+			}
+		})
+	}
+}
+
 func TestCachingTransportStreamsLargeResponseWithoutCaching(t *testing.T) {
 	originRequests := 0
 	body := strings.Repeat("x", 256)

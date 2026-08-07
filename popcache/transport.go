@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -98,7 +99,7 @@ func (t *cachingTransport) fetchFromOrigin(
 	}
 	setCacheStatus(resp, "MISS")
 
-	if resp.StatusCode != http.StatusOK {
+	if !isCacheableResponse(resp) {
 		return resp, nil
 	}
 
@@ -133,6 +134,27 @@ func (t *cachingTransport) fetchFromOrigin(
 	entry.body = body
 	t.cache.set(key, entry, t.ttl)
 	return resp, nil
+}
+
+func isCacheableResponse(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	if len(resp.Header.Values("Set-Cookie")) > 0 {
+		return false
+	}
+
+	for _, value := range resp.Header.Values("Cache-Control") {
+		for _, directive := range strings.Split(value, ",") {
+			name, _, _ := strings.Cut(directive, "=")
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "no-store", "private":
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func responseFromCache(req *http.Request, entry cacheEntry) *http.Response {

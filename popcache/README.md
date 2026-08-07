@@ -12,6 +12,8 @@ cache容量は次のflagで指定する。
 
 容量が不足すると、最後に参照されてから最も時間が経ったobjectを削除する。object上限を超えるresponseはcacheへ保存せず、Originから利用者へstreamする。
 
+HTTP 200 responseであっても、`Cache-Control: no-store`、`Cache-Control: private`、`Set-Cookie`のいずれかを含む場合はcacheへ保存しない。利用者ごとの情報を他の利用者へ配信しないため、安全側に扱う。
+
 同じURLへのcache missが同時に発生した場合、1台のpopcache内では最初のrequestだけがOriginから取得する。後続のrequestは取得完了を待ち、保存されたcacheを利用する。これにより、人気objectの期限切れなどでOriginへ同じrequestが集中することを防ぐ。
 
 HTTP 200以外や容量上限を超えるresponseはcacheに保存できないため、待機していたrequestもそれぞれOriginから取得する。また、この集約はnode単位であり、C0とC1の間では共有しない。
