@@ -9,6 +9,10 @@ $ cd l4lb
 $ DURATION=10 PARALLEL=4 ./benchmark.sh | tee /tmp/l4lb-baseline.csv
 ```
 
+XDPのattach方式は`XDP_MODE`で指定できる。既定値は`auto`で、環境に合わせてカーネルが選択する。
+利用可能な方式を固定したい場合は、例えば`XDP_MODE=generic DURATION=10 ./benchmark.sh`のように実行する。
+`driver`は対応ドライバがない環境では起動に失敗する。
+
 各IP familyで次の2種類を測る。
 
 - `throughput`: iperfによる転送量重視のTCP stream

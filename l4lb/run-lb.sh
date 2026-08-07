@@ -4,6 +4,7 @@ set -e
 SCRIPT_DIR=$(readlink -f "$(dirname "$0")")
 source "${SCRIPT_DIR}/mtu-config.sh"
 HEALTH_CHECK_ENABLED=${HEALTH_CHECK_ENABLED:-true}
+XDP_MODE=${XDP_MODE:-auto}
 
 export MY_USER=${USER}
 export SRC_DIR=$(readlink -f "${SCRIPT_DIR}/..")
@@ -33,4 +34,4 @@ done
 echo ${dests}
 
 sudo ip -n LB -6 tunnel del v6tun0 || echo "no v6tun0. good" # in case it exists from a `nolb.sh` run
-sudo ip netns exec LB ${BIN_DIR}/l4lb -xdpcapHookPath="" -dests="${dests}" -vip6="2001:db8:100::10" -underlayMTU="${UNDERLAY_MTU}" -healthCheckEnabled="${HEALTH_CHECK_ENABLED}"
+sudo ip netns exec LB ${BIN_DIR}/l4lb -xdpcapHookPath="" -dests="${dests}" -vip6="2001:db8:100::10" -underlayMTU="${UNDERLAY_MTU}" -healthCheckEnabled="${HEALTH_CHECK_ENABLED}" -xdpMode="${XDP_MODE}"

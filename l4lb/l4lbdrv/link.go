@@ -12,6 +12,15 @@ import (
 
 var LinkCheckFrequency = time.Second
 
+// XDPMode controls how the kernel attaches the XDP program to a link.
+type XDPMode string
+
+const (
+	XDPModeAuto    XDPMode = "auto"
+	XDPModeGeneric XDPMode = "generic"
+	XDPModeDriver  XDPMode = "driver"
+)
+
 // `LinkAttacher` monitors the link and reattaches the XDP program if it is
 // detached.  This is a workaround to some buggy Linux environments where XDP
 // programs are unattached from the interface spontaneously.
@@ -23,8 +32,17 @@ type LinkAttacher struct {
 	linkCheckDone   chan struct{}
 }
 
-func AttachToLink(link netlink.Link, fd int) (*LinkAttacher, error) {
-	if err := netlink.LinkSetXdpFd(link, fd); err != nil {
+func AttachToLink(link netlink.Link, fd int, mode XDPMode) (*LinkAttacher, error) {
+	flags, err := xdpModeFlags(mode)
+	if err != nil {
+		return nil, err
+	}
+	if flags == 0 {
+		err = netlink.LinkSetXdpFd(link, fd)
+	} else {
+		err = netlink.LinkSetXdpFdWithFlags(link, fd, flags)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("Failed to attach to link %s: %w", link.Attrs().Name, err)
 	}
 	slog.Info("Attached balancer XDP program", slog.Int("fd", fd), slog.String("interface", link.Attrs().Name))
@@ -41,7 +59,7 @@ func AttachToLink(link netlink.Link, fd int) (*LinkAttacher, error) {
 			case <-a.linkCheckDone:
 				break
 			case <-a.linkCheckTicker.C:
-				err := netlink.LinkSetXdpFdWithFlags(a.attachedLink, fd, unix.XDP_FLAGS_UPDATE_IF_NOEXIST)
+				err := netlink.LinkSetXdpFdWithFlags(a.attachedLink, fd, flags|int(unix.XDP_FLAGS_UPDATE_IF_NOEXIST))
 				if err == nil {
 					slog.Warn("Reattached xdp prog successfully", slog.Int("fd", fd), slog.String("interface", link.Attrs().Name))
 				} else if !errors.Is(err, unix.EBUSY) {
@@ -52,6 +70,19 @@ func AttachToLink(link netlink.Link, fd int) (*LinkAttacher, error) {
 	}()
 
 	return a, nil
+}
+
+func xdpModeFlags(mode XDPMode) (int, error) {
+	switch mode {
+	case "", XDPModeAuto:
+		return 0, nil
+	case XDPModeGeneric:
+		return int(unix.XDP_FLAGS_SKB_MODE), nil
+	case XDPModeDriver:
+		return int(unix.XDP_FLAGS_DRV_MODE), nil
+	default:
+		return 0, fmt.Errorf("invalid XDP mode %q (want auto, generic, or driver)", mode)
+	}
 }
 
 func (a *LinkAttacher) Close() error {
