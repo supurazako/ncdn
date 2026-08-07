@@ -45,6 +45,7 @@ struct stat_counters { /* go:Add,String */
   uint64_t ip_option_packet_total; // HELP Number of VIP packets dropped because they had IPv4 options.
   uint64_t non_supported_proto_packet_total; // HELP Number of VIP packets dropped because TCP did not immediately follow the IP header.
   uint64_t no_vip_match_total; // HELP Number of packets passed because their destination did not match a VIP.
+  uint64_t no_healthy_destination_total; // HELP Number of VIP packets dropped because no healthy cache destination was available.
   uint64_t mtu_exceeded_packet_total; // HELP Number of packets too large for IPv6 encapsulation over the configured underlay MTU.
   uint64_t icmpv4_frag_needed_total; // HELP Number of ICMPv4 Fragmentation Needed responses sent.
   uint64_t icmpv6_packet_too_big_total; // HELP Number of ICMPv6 Packet Too Big responses sent.
@@ -429,6 +430,11 @@ int lb_main(struct xdp_md* ctx) {
       EXIT(send_icmpv4_frag_needed(ctx, c, config->inner_mtu));
     }
     EXIT(send_icmpv6_packet_too_big(ctx, c, config->inner_mtu));
+  }
+
+  if (config->num_dests == 0) {
+    ++c->no_healthy_destination_total;
+    EXIT(XDP_DROP);
   }
 
   uint32_t dest_idx = (key % config->num_dests) + 1;
