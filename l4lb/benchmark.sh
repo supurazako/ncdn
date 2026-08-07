@@ -32,6 +32,9 @@ function cleanup() {
     for ns in C0 C1; do
         sudo ip netns exec "${ns}" pkill -x iperf >/dev/null 2>&1
     done
+    # A daemonized iperf can outlive the namespace command that started it.
+    # Remove such leftovers as well so the next benchmark can bind the port.
+    sudo pkill -x iperf >/dev/null 2>&1
     sudo ip netns exec LB pkill -TERM -x l4lb >/dev/null 2>&1
     if [ -n "${LB_PID}" ]; then
         kill "${LB_PID}" >/dev/null 2>&1
@@ -86,13 +89,21 @@ function stop_servers() {
     for ns in C0 C1; do
         sudo ip netns exec "${ns}" pkill -x iperf >/dev/null 2>&1 || true
     done
+    # `iperf -D` daemonizes, so also clean up processes that are no longer
+    # visible through `ip netns exec` after a failed previous run.
+    sudo pkill -TERM -x iperf >/dev/null 2>&1 || true
     for _ in $(seq 1 20); do
-        if ! sudo ip netns exec C0 pgrep -x iperf >/dev/null 2>&1 && \
-            ! sudo ip netns exec C1 pgrep -x iperf >/dev/null 2>&1; then
+        if ! sudo pgrep -x iperf >/dev/null 2>&1; then
             return
         fi
         sleep 0.1
     done
+
+    # Do not leave a stale daemon blocking the next run if it ignored SIGTERM.
+    sudo pkill -KILL -x iperf >/dev/null 2>&1 || true
+    if ! sudo pgrep -x iperf >/dev/null 2>&1; then
+        return
+    fi
     echo "Timed out waiting for iperf servers to stop" >&2
     exit 1
 }
