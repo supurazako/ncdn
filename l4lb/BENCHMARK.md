@@ -22,6 +22,8 @@ XDPのattach方式は`XDP_MODE`で指定できる。既定値は`auto`で、環�
 
 `throughput`でも本計測前にTCP warm-upを行う。時間は`THROUGHPUT_WARMUP_DURATION`で変更できる。
 
+throughputだけを測る場合は`PACKET_RATES=`を指定してpacket-rate測定をスキップできる。
+
 主な列は次のとおり。
 
 - `xdp_mode`、`interface_type`、`rx_queues`、`tx_queues`: 測定時のXDP attach modeとinterface情報。実機とveth模擬環境の結果を区別するために記録する
