@@ -12,7 +12,7 @@ import (
 // Source: ../c/lb.c
 
 const (
-	DESTINATIONS_SIZE = 255 // ../c/lb.c:95
+	DESTINATIONS_SIZE = 255 // ../c/lb.c:98
 )
 
 type StatCounters struct { // ../c/lb.c:42
@@ -230,10 +230,13 @@ func (c *StatCounters) String() string {
 }
 
 type LbConfig struct { // ../c/lb.c:74
-	Vip4Address uint32    // ../c/lb.c:75
-	Vip6Address [16]uint8 // ../c/lb.c:76
-	NumDests    uint32    // ../c/lb.c:77
-	InnerMtu    uint32    // ../c/lb.c:78
+	Vip4Address   uint32    // ../c/lb.c:75
+	Vip6Address   [16]uint8 // ../c/lb.c:76
+	SrcIp6Address [16]uint8 // ../c/lb.c:77
+	SrcMacAddress [6]uint8  // ../c/lb.c:78
+	Padding       [2]uint8  // ../c/lb.c:79
+	NumDests      uint32    // ../c/lb.c:80
+	InnerMtu      uint32    // ../c/lb.c:81
 }
 
 func LbConfigAssertLayout(s *DWARFStruct) error {
@@ -259,6 +262,21 @@ func LbConfigAssertLayout(s *DWARFStruct) error {
 	doff = fs["vip6_address"].Offset
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go Vip6Address: %d, dwarf vip6_address: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(LbConfig{}.SrcIp6Address)
+	doff = fs["src_ip6_address"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go SrcIp6Address: %d, dwarf src_ip6_address: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(LbConfig{}.SrcMacAddress)
+	doff = fs["src_mac_address"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go SrcMacAddress: %d, dwarf src_mac_address: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(LbConfig{}.Padding)
+	doff = fs["padding"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go Padding: %d, dwarf padding: %d", goff, doff)
 	}
 	goff = unsafe.Offsetof(LbConfig{}.NumDests)
 	doff = fs["num_dests"].Offset

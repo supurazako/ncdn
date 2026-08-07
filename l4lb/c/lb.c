@@ -74,9 +74,12 @@ struct {
 struct lb_config { /* go: */
   uint32_t vip4_address;
   uint8_t vip6_address[16];
+  uint8_t src_ip6_address[16];
+  uint8_t src_mac_address[6];
+  uint8_t padding[2];
   uint32_t num_dests;
   uint32_t inner_mtu;
-} PACKED;
+};
 
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -338,12 +341,6 @@ int lb_main(struct xdp_md* ctx) {
     EXIT(XDP_PASS);
   }
 
-  struct destination_entry* src_entry =
-      bpf_map_lookup_elem(&destinations_map, &map_key_zero);
-  if (!src_entry) {
-    EXIT(XDP_PASS);
-  }
-
   if (data + sizeof(struct ethhdr) > data_end) {
     ++c->too_short_packet_total;
     EXIT(XDP_PASS);
@@ -564,8 +561,8 @@ int lb_main(struct xdp_md* ctx) {
 
   eth = (void*)(uint64_t)ctx->data;
   eth->h_proto = htons(ETH_P_IPV6);
-  memcpy(eth->h_source, src_entry->mac_address,
-         sizeof(src_entry->mac_address));
+  memcpy(eth->h_source, config->src_mac_address,
+         sizeof(config->src_mac_address));
   memcpy(eth->h_dest, dest->mac_address, sizeof(dest->mac_address));
 
   struct ipv6hdr* ip6_outer = (void*)(eth + 1);
@@ -578,7 +575,7 @@ int lb_main(struct xdp_md* ctx) {
   ip6_outer->nexthdr =
       ip_version == 4 ? IPPROTO_IPIP : IPPROTO_IPV6;
   ip6_outer->hop_limit = 64;
-  memcpy(&ip6_outer->saddr, src_entry->ip6_address, 16);
+  memcpy(&ip6_outer->saddr, config->src_ip6_address, 16);
   memcpy(&ip6_outer->daddr, dest->ip6_address, 16);
 
   if (padding > 0) {

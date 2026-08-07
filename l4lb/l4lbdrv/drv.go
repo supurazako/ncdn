@@ -186,10 +186,12 @@ func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
 	}
 
 	err = lb.bindings.ConfigMap.Update(uint32(0), &LbConfig{
-		Vip4Address: vip4,
-		Vip6Address: vip6,
-		NumDests:    uint32(len(dests) - 1),
-		InnerMtu:    innerMTU,
+		Vip4Address:   vip4,
+		Vip6Address:   vip6,
+		SrcIp6Address: dests[0].IPv6Addr.As16(),
+		SrcMacAddress: [6]uint8(dests[0].HardwareAddr),
+		NumDests:      uint32(len(dests) - 1),
+		InnerMtu:      innerMTU,
 	}, 0)
 	if err != nil {
 		return fmt.Errorf("Failed to update ConfigMap: %w", err)
