@@ -12,25 +12,28 @@ import (
 // Source: ../c/lb.c
 
 const (
-	DESTINATIONS_SIZE = 255 // ../c/lb.c:87
+	DESTINATIONS_SIZE = 255 // ../c/lb.c:95
 )
 
-type StatCounters struct { // ../c/lb.c:37
-	RxPacketTotal                 uint64 // ../c/lb.c:38
-	RxTotalSize                   uint64 // ../c/lb.c:39
-	TooShortPacketTotal           uint64 // ../c/lb.c:41
-	UnsupportedNetworkPacketTotal uint64 // ../c/lb.c:42
-	Ipv4PacketTotal               uint64 // ../c/lb.c:43
-	Ipv6PacketTotal               uint64 // ../c/lb.c:44
-	IpOptionPacketTotal           uint64 // ../c/lb.c:45
-	NonSupportedProtoPacketTotal  uint64 // ../c/lb.c:46
-	NoVipMatchTotal               uint64 // ../c/lb.c:47
-	NoHealthyDestinationTotal     uint64 // ../c/lb.c:48
-	MtuExceededPacketTotal        uint64 // ../c/lb.c:49
-	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:50
-	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:51
-	FailedAdjustHeadTotal         uint64 // ../c/lb.c:52
-	FailedAdjustTailTotal         uint64 // ../c/lb.c:53
+type StatCounters struct { // ../c/lb.c:42
+	RxPacketTotal                 uint64 // ../c/lb.c:43
+	RxTotalSize                   uint64 // ../c/lb.c:44
+	TooShortPacketTotal           uint64 // ../c/lb.c:46
+	UnsupportedNetworkPacketTotal uint64 // ../c/lb.c:47
+	Ipv4PacketTotal               uint64 // ../c/lb.c:48
+	Ipv6PacketTotal               uint64 // ../c/lb.c:49
+	IpOptionPacketTotal           uint64 // ../c/lb.c:50
+	NonSupportedProtoPacketTotal  uint64 // ../c/lb.c:51
+	NoVipMatchTotal               uint64 // ../c/lb.c:52
+	NoHealthyDestinationTotal     uint64 // ../c/lb.c:53
+	MtuExceededPacketTotal        uint64 // ../c/lb.c:54
+	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:55
+	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:56
+	InvalidIcmpErrorTotal         uint64 // ../c/lb.c:57
+	Icmpv4ErrorForwardedTotal     uint64 // ../c/lb.c:58
+	Icmpv6ErrorForwardedTotal     uint64 // ../c/lb.c:59
+	FailedAdjustHeadTotal         uint64 // ../c/lb.c:60
+	FailedAdjustTailTotal         uint64 // ../c/lb.c:61
 }
 
 func StatCountersAssertLayout(s *DWARFStruct) error {
@@ -112,6 +115,21 @@ func StatCountersAssertLayout(s *DWARFStruct) error {
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go Icmpv6PacketTooBigTotal: %d, dwarf icmpv6_packet_too_big_total: %d", goff, doff)
 	}
+	goff = unsafe.Offsetof(StatCounters{}.InvalidIcmpErrorTotal)
+	doff = fs["invalid_icmp_error_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go InvalidIcmpErrorTotal: %d, dwarf invalid_icmp_error_total: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(StatCounters{}.Icmpv4ErrorForwardedTotal)
+	doff = fs["icmpv4_error_forwarded_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go Icmpv4ErrorForwardedTotal: %d, dwarf icmpv4_error_forwarded_total: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(StatCounters{}.Icmpv6ErrorForwardedTotal)
+	doff = fs["icmpv6_error_forwarded_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go Icmpv6ErrorForwardedTotal: %d, dwarf icmpv6_error_forwarded_total: %d", goff, doff)
+	}
 	goff = unsafe.Offsetof(StatCounters{}.FailedAdjustHeadTotal)
 	doff = fs["failed_adjust_head_total"].Offset
 	if goff != uintptr(doff) {
@@ -140,6 +158,9 @@ func (c *StatCounters) Add(other *StatCounters) {
 	c.MtuExceededPacketTotal += other.MtuExceededPacketTotal
 	c.Icmpv4FragNeededTotal += other.Icmpv4FragNeededTotal
 	c.Icmpv6PacketTooBigTotal += other.Icmpv6PacketTooBigTotal
+	c.InvalidIcmpErrorTotal += other.InvalidIcmpErrorTotal
+	c.Icmpv4ErrorForwardedTotal += other.Icmpv4ErrorForwardedTotal
+	c.Icmpv6ErrorForwardedTotal += other.Icmpv6ErrorForwardedTotal
 	c.FailedAdjustHeadTotal += other.FailedAdjustHeadTotal
 	c.FailedAdjustTailTotal += other.FailedAdjustTailTotal
 }
@@ -186,6 +207,15 @@ func (c *StatCounters) String() string {
 	if c.Icmpv6PacketTooBigTotal != 0 {
 		buf.WriteString(fmt.Sprintf("Icmpv6PacketTooBigTotal=%d, ", c.Icmpv6PacketTooBigTotal))
 	}
+	if c.InvalidIcmpErrorTotal != 0 {
+		buf.WriteString(fmt.Sprintf("InvalidIcmpErrorTotal=%d, ", c.InvalidIcmpErrorTotal))
+	}
+	if c.Icmpv4ErrorForwardedTotal != 0 {
+		buf.WriteString(fmt.Sprintf("Icmpv4ErrorForwardedTotal=%d, ", c.Icmpv4ErrorForwardedTotal))
+	}
+	if c.Icmpv6ErrorForwardedTotal != 0 {
+		buf.WriteString(fmt.Sprintf("Icmpv6ErrorForwardedTotal=%d, ", c.Icmpv6ErrorForwardedTotal))
+	}
 	if c.FailedAdjustHeadTotal != 0 {
 		buf.WriteString(fmt.Sprintf("FailedAdjustHeadTotal=%d, ", c.FailedAdjustHeadTotal))
 	}
@@ -199,11 +229,11 @@ func (c *StatCounters) String() string {
 	return buf.String()
 }
 
-type LbConfig struct { // ../c/lb.c:66
-	Vip4Address uint32    // ../c/lb.c:67
-	Vip6Address [16]uint8 // ../c/lb.c:68
-	NumDests    uint32    // ../c/lb.c:69
-	InnerMtu    uint32    // ../c/lb.c:70
+type LbConfig struct { // ../c/lb.c:74
+	Vip4Address uint32    // ../c/lb.c:75
+	Vip6Address [16]uint8 // ../c/lb.c:76
+	NumDests    uint32    // ../c/lb.c:77
+	InnerMtu    uint32    // ../c/lb.c:78
 }
 
 func LbConfigAssertLayout(s *DWARFStruct) error {

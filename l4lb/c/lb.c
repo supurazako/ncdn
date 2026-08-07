@@ -24,11 +24,16 @@ void* memcpy(void*, const void*, unsigned long);
 
 #define ICMPV4_DEST_UNREACHABLE 3
 #define ICMPV4_FRAGMENTATION_NEEDED 4
+#define ICMPV4_TIME_EXCEEDED 11
+#define ICMPV4_PARAMETER_PROBLEM 12
 #define ICMPV4_QUOTE_LEN 28
 #define ICMPV4_MESSAGE_LEN 36
 #define ICMPV4_REPLY_FRAME_LEN 70
 
+#define ICMPV6_DEST_UNREACHABLE 1
 #define ICMPV6_PACKET_TOO_BIG 2
+#define ICMPV6_TIME_EXCEEDED 3
+#define ICMPV6_PARAMETER_PROBLEM 4
 #define ICMPV6_QUOTE_LEN 1232
 #define ICMPV6_MESSAGE_LEN 1240
 #define ICMPV6_REPLY_FRAME_LEN 1294
@@ -49,6 +54,9 @@ struct stat_counters { /* go:Add,String */
   uint64_t mtu_exceeded_packet_total; // HELP Number of packets too large for IPv6 encapsulation over the configured underlay MTU.
   uint64_t icmpv4_frag_needed_total; // HELP Number of ICMPv4 Fragmentation Needed responses sent.
   uint64_t icmpv6_packet_too_big_total; // HELP Number of ICMPv6 Packet Too Big responses sent.
+  uint64_t invalid_icmp_error_total; // HELP Number of ICMP errors dropped because their quoted packet could not identify a supported DSR flow.
+  uint64_t icmpv4_error_forwarded_total; // HELP Number of ICMPv4 errors forwarded to a cache destination.
+  uint64_t icmpv6_error_forwarded_total; // HELP Number of ICMPv6 errors forwarded to a cache destination.
   uint64_t failed_adjust_head_total; // HELP Number of xdp_adjust_head failures.
   uint64_t failed_adjust_tail_total; // HELP Number of xdp_adjust_tail failures.
 } ALIGN8;
@@ -115,6 +123,21 @@ struct icmpv6_packet_too_big {
   uint8_t code;
   uint16_t checksum;
   uint32_t mtu;
+} PACKED;
+
+// Every ICMP error starts with eight bytes before the quoted IP packet.
+struct icmp_error_header {
+  uint8_t type;
+  uint8_t code;
+  uint16_t checksum;
+  uint32_t rest;
+} PACKED;
+
+// ICMP errors are only required to quote the beginning of the transport
+// header. The ports are sufficient to recover the original load-balancer key.
+struct tcp_ports {
+  uint16_t source;
+  uint16_t dest;
 } PACKED;
 
 static __always_inline uint16_t fold_checksum(uint32_t sum) {
@@ -331,6 +354,7 @@ int lb_main(struct xdp_md* ctx) {
   uint16_t inner_len = 0;
   uint16_t minimum_inner_len = 0;
   int ip_version = 0;
+  int icmp_error_version = 0;
 
   if (eth->h_proto == htons(ETH_P_IP)) {
     if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) > data_end) {
@@ -351,25 +375,60 @@ int lb_main(struct xdp_md* ctx) {
       ++c->ip_option_packet_total;
       EXIT(XDP_DROP);
     }
-    if (ip4->protocol != IPPROTO_TCP) {
+    if (ip4->protocol == IPPROTO_TCP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
+              sizeof(struct tcphdr) >
+          data_end) {
+        ++c->too_short_packet_total;
+        EXIT(XDP_DROP);
+      }
+
+      struct tcphdr* tcp = (struct tcphdr*)(ip4 + 1);
+      key = ip4->saddr + tcp->source;
+      minimum_inner_len = sizeof(struct iphdr) + sizeof(struct tcphdr);
+      debugk("incoming IPv4 packet: ip=%pI4 port=%u", &ip4->saddr,
+             ntohs(tcp->source));
+    } else if (ip4->protocol == IPPROTO_ICMP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
+              sizeof(struct icmp_error_header) + sizeof(struct iphdr) +
+              sizeof(struct tcp_ports) >
+          data_end) {
+        ++c->too_short_packet_total;
+        EXIT(XDP_DROP);
+      }
+
+      struct icmp_error_header* icmp = (void*)(ip4 + 1);
+      if (icmp->type != ICMPV4_DEST_UNREACHABLE &&
+          icmp->type != ICMPV4_TIME_EXCEEDED &&
+          icmp->type != ICMPV4_PARAMETER_PROBLEM) {
+        ++c->non_supported_proto_packet_total;
+        EXIT(XDP_DROP);
+      }
+
+      struct iphdr* quoted_ip4 = (void*)(icmp + 1);
+      if (quoted_ip4->version != 4 || quoted_ip4->ihl != 5 ||
+          quoted_ip4->protocol != IPPROTO_TCP ||
+          (quoted_ip4->frag_off & htons(0x1fff)) != 0 ||
+          quoted_ip4->saddr != config->vip4_address) {
+        ++c->invalid_icmp_error_total;
+        EXIT(XDP_DROP);
+      }
+      struct tcp_ports* quoted_tcp = (void*)(quoted_ip4 + 1);
+      key = quoted_ip4->daddr + quoted_tcp->dest;
+      minimum_inner_len = sizeof(struct iphdr) +
+                          sizeof(struct icmp_error_header) +
+                          sizeof(struct iphdr) + sizeof(struct tcp_ports);
+      icmp_error_version = 4;
+      debugk("incoming ICMPv4 error: quoted_ip=%pI4 port=%u",
+             &quoted_ip4->daddr, ntohs(quoted_tcp->dest));
+    } else {
       ++c->non_supported_proto_packet_total;
       EXIT(XDP_DROP);
     }
-    if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
-            sizeof(struct tcphdr) >
-        data_end) {
-      ++c->too_short_packet_total;
-      EXIT(XDP_DROP);
-    }
 
-    struct tcphdr* tcp = (struct tcphdr*)(ip4 + 1);
-    key = ip4->saddr + tcp->source;
     inner_len = ntohs(ip4->tot_len);
-    minimum_inner_len = sizeof(struct iphdr) + sizeof(struct tcphdr);
     ip_version = 4;
     ++c->ipv4_packet_total;
-    debugk("incoming IPv4 packet: ip=%pI4 port=%u", &ip4->saddr,
-           ntohs(tcp->source));
   } else if (eth->h_proto == htons(ETH_P_IPV6)) {
     if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) > data_end) {
       ++c->too_short_packet_total;
@@ -390,26 +449,66 @@ int lb_main(struct xdp_md* ctx) {
       EXIT(XDP_PASS);
     }
     // Extension headers are deliberately not handled in the first IPv6
-    // implementation. TCP must immediately follow the fixed IPv6 header.
-    if (ip6->nexthdr != IPPROTO_TCP) {
+    // implementation. TCP or ICMPv6 must immediately follow the fixed header.
+    if (ip6->nexthdr == IPPROTO_TCP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
+              sizeof(struct tcphdr) >
+          data_end) {
+        ++c->too_short_packet_total;
+        EXIT(XDP_DROP);
+      }
+
+      struct tcphdr* tcp = (struct tcphdr*)(ip6 + 1);
+      key = ip6->saddr.s6_addr32[0] ^ ip6->saddr.s6_addr32[1] ^
+            ip6->saddr.s6_addr32[2] ^ ip6->saddr.s6_addr32[3] ^ tcp->source;
+      minimum_inner_len = sizeof(struct ipv6hdr) + sizeof(struct tcphdr);
+      debugk("incoming IPv6 packet: port=%u", ntohs(tcp->source));
+    } else if (ip6->nexthdr == IPPROTO_ICMPV6) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
+              sizeof(struct icmp_error_header) + sizeof(struct ipv6hdr) +
+              sizeof(struct tcp_ports) >
+          data_end) {
+        ++c->too_short_packet_total;
+        EXIT(XDP_DROP);
+      }
+
+      struct icmp_error_header* icmp = (void*)(ip6 + 1);
+      if (icmp->type != ICMPV6_DEST_UNREACHABLE &&
+          icmp->type != ICMPV6_PACKET_TOO_BIG &&
+          icmp->type != ICMPV6_TIME_EXCEEDED &&
+          icmp->type != ICMPV6_PARAMETER_PROBLEM) {
+        ++c->non_supported_proto_packet_total;
+        EXIT(XDP_DROP);
+      }
+
+      struct ipv6hdr* quoted_ip6 = (void*)(icmp + 1);
+      uint32_t* vip6_quoted = (uint32_t*)config->vip6_address;
+      if (quoted_ip6->version != 6 || quoted_ip6->nexthdr != IPPROTO_TCP ||
+          quoted_ip6->saddr.s6_addr32[0] != vip6_quoted[0] ||
+          quoted_ip6->saddr.s6_addr32[1] != vip6_quoted[1] ||
+          quoted_ip6->saddr.s6_addr32[2] != vip6_quoted[2] ||
+          quoted_ip6->saddr.s6_addr32[3] != vip6_quoted[3]) {
+        ++c->invalid_icmp_error_total;
+        EXIT(XDP_DROP);
+      }
+      struct tcp_ports* quoted_tcp = (void*)(quoted_ip6 + 1);
+      key = quoted_ip6->daddr.s6_addr32[0] ^
+            quoted_ip6->daddr.s6_addr32[1] ^
+            quoted_ip6->daddr.s6_addr32[2] ^
+            quoted_ip6->daddr.s6_addr32[3] ^ quoted_tcp->dest;
+      minimum_inner_len = sizeof(struct ipv6hdr) +
+                          sizeof(struct icmp_error_header) +
+                          sizeof(struct ipv6hdr) + sizeof(struct tcp_ports);
+      icmp_error_version = 6;
+      debugk("incoming ICMPv6 error: port=%u", ntohs(quoted_tcp->dest));
+    } else {
       ++c->non_supported_proto_packet_total;
       EXIT(XDP_DROP);
     }
-    if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
-            sizeof(struct tcphdr) >
-        data_end) {
-      ++c->too_short_packet_total;
-      EXIT(XDP_DROP);
-    }
 
-    struct tcphdr* tcp = (struct tcphdr*)(ip6 + 1);
-    key = ip6->saddr.s6_addr32[0] ^ ip6->saddr.s6_addr32[1] ^
-          ip6->saddr.s6_addr32[2] ^ ip6->saddr.s6_addr32[3] ^ tcp->source;
     inner_len = sizeof(struct ipv6hdr) + ntohs(ip6->payload_len);
-    minimum_inner_len = sizeof(struct ipv6hdr) + sizeof(struct tcphdr);
     ip_version = 6;
     ++c->ipv6_packet_total;
-    debugk("incoming IPv6 packet: port=%u", ntohs(tcp->source));
   } else {
     ++c->unsupported_network_packet_total;
     EXIT(XDP_PASS);
@@ -426,6 +525,10 @@ int lb_main(struct xdp_md* ctx) {
 
   if (inner_len > config->inner_mtu) {
     ++c->mtu_exceeded_packet_total;
+    // An ICMP error must never trigger another ICMP error.
+    if (icmp_error_version != 0) {
+      EXIT(XDP_DROP);
+    }
     if (ip_version == 4) {
       EXIT(send_icmpv4_frag_needed(ctx, c, config->inner_mtu));
     }
@@ -483,6 +586,12 @@ int lb_main(struct xdp_md* ctx) {
       ++c->failed_adjust_tail_total;
       EXIT(XDP_DROP);
     }
+  }
+
+  if (icmp_error_version == 4) {
+    ++c->icmpv4_error_forwarded_total;
+  } else if (icmp_error_version == 6) {
+    ++c->icmpv6_error_forwarded_total;
   }
 
   EXIT(XDP_TX);

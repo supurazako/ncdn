@@ -218,6 +218,199 @@ func TestL4LBIPv6InIPv6(t *testing.T) {
 	}
 }
 
+func TestL4LBForwardsIPv4DSRICMPErrorToSelectedCache(t *testing.T) {
+	vip4 := netip.MustParseAddr("192.0.2.10")
+	clientIP := netip.MustParseAddr("198.51.100.200")
+	const clientPort = 12345
+	lbMAC := []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xfe}
+	lb := newTestLBWithTwoCacheDestinations(
+		t,
+		vip4,
+		netip.MustParseAddr("2001:db8:100::10"),
+		lbMAC,
+	)
+	defer lb.Close()
+
+	forwardPacket := serializeIPv4TCPPacket(
+		t,
+		clientIP,
+		vip4,
+		clientPort,
+		8889,
+		lbMAC,
+	)
+	forwarded := runXDP(t, lb, forwardPacket, XDP_TX)
+	wantDestination := outerIPv6Destination(t, forwarded)
+
+	quotedPacket := serializeIPv4TCPPacketWithoutEthernet(
+		t,
+		vip4,
+		clientIP,
+		8889,
+		clientPort,
+	)
+	icmpError := serializeIPv4ICMPError(
+		t,
+		netip.MustParseAddr("198.51.100.1"),
+		vip4,
+		lbMAC,
+		quotedPacket[:28],
+	)
+	if err := lb.bindings.ResetStatCounters(); err != nil {
+		t.Fatal(err)
+	}
+	encapsulated := runXDP(t, lb, icmpError, XDP_TX)
+
+	if got := outerIPv6Destination(t, encapsulated); got != wantDestination {
+		t.Fatalf("ICMP error destination = %s, forward flow destination = %s",
+			got, wantDestination)
+	}
+	if got := layers.IPProtocol(encapsulated[20]); got != layers.IPProtocolIPv4 {
+		t.Fatalf("outer next header = %s, want IPv4", got)
+	}
+	if !bytes.Equal(encapsulated[54:], icmpError[14:]) {
+		t.Fatal("encapsulation did not preserve the received ICMPv4 error")
+	}
+	counters, err := lb.bindings.ReadStatCountersAggregate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.Icmpv4ErrorForwardedTotal != 1 {
+		t.Fatalf("unexpected counters: %s", counters)
+	}
+}
+
+func TestL4LBForwardsIPv6DSRICMPErrorToSelectedCache(t *testing.T) {
+	vip6 := netip.MustParseAddr("2001:db8:100::10")
+	clientIP := netip.MustParseAddr("2001:db8:0:2::200")
+	const clientPort = 12345
+	lbMAC := []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xfe}
+	lb := newTestLBWithTwoCacheDestinations(
+		t,
+		netip.MustParseAddr("192.0.2.10"),
+		vip6,
+		lbMAC,
+	)
+	defer lb.Close()
+
+	forwardPacket := serializeIPv6TCPPacket(
+		t,
+		clientIP,
+		vip6,
+		clientPort,
+		8889,
+		lbMAC,
+	)
+	forwarded := runXDP(t, lb, forwardPacket, XDP_TX)
+	wantDestination := outerIPv6Destination(t, forwarded)
+
+	quotedPacket := serializeIPv6TCPPacketWithoutEthernet(
+		t,
+		vip6,
+		clientIP,
+		8889,
+		clientPort,
+	)
+	icmpError := serializeIPv6ICMPError(
+		t,
+		netip.MustParseAddr("2001:db8:0:2::1"),
+		vip6,
+		lbMAC,
+		quotedPacket[:44],
+	)
+	if err := lb.bindings.ResetStatCounters(); err != nil {
+		t.Fatal(err)
+	}
+	encapsulated := runXDP(t, lb, icmpError, XDP_TX)
+
+	if got := outerIPv6Destination(t, encapsulated); got != wantDestination {
+		t.Fatalf("ICMPv6 error destination = %s, forward flow destination = %s",
+			got, wantDestination)
+	}
+	if got := layers.IPProtocol(encapsulated[20]); got != layers.IPProtocolIPv6 {
+		t.Fatalf("outer next header = %s, want IPv6", got)
+	}
+	if !bytes.Equal(encapsulated[54:], icmpError[14:]) {
+		t.Fatal("encapsulation did not preserve the received ICMPv6 error")
+	}
+	counters, err := lb.bindings.ReadStatCountersAggregate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.Icmpv6ErrorForwardedTotal != 1 {
+		t.Fatalf("unexpected counters: %s", counters)
+	}
+}
+
+func TestL4LBDropsICMPErrorThatDoesNotQuoteVIP(t *testing.T) {
+	vip4 := netip.MustParseAddr("192.0.2.10")
+	vip6 := netip.MustParseAddr("2001:db8:100::10")
+	lbMAC := []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xfe}
+	lb := newTestLB(t, vip4, vip6, lbMAC)
+	defer lb.Close()
+
+	tests := []struct {
+		name   string
+		packet func() []byte
+	}{
+		{
+			name: "IPv4",
+			packet: func() []byte {
+				quote := serializeIPv4TCPPacketWithoutEthernet(
+					t,
+					netip.MustParseAddr("192.0.2.99"),
+					netip.MustParseAddr("198.51.100.200"),
+					8889,
+					12345,
+				)
+				return serializeIPv4ICMPError(
+					t,
+					netip.MustParseAddr("198.51.100.1"),
+					vip4,
+					lbMAC,
+					quote[:28],
+				)
+			},
+		},
+		{
+			name: "IPv6",
+			packet: func() []byte {
+				quote := serializeIPv6TCPPacketWithoutEthernet(
+					t,
+					netip.MustParseAddr("2001:db8:100::99"),
+					netip.MustParseAddr("2001:db8:0:2::200"),
+					8889,
+					12345,
+				)
+				return serializeIPv6ICMPError(
+					t,
+					netip.MustParseAddr("2001:db8:0:2::1"),
+					vip6,
+					lbMAC,
+					quote[:44],
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := lb.bindings.ResetStatCounters(); err != nil {
+				t.Fatal(err)
+			}
+			runXDP(t, lb, test.packet(), XDP_DROP)
+
+			counters, err := lb.bindings.ReadStatCountersAggregate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if counters.InvalidIcmpErrorTotal != 1 {
+				t.Fatalf("unexpected counters: %s", counters)
+			}
+		})
+	}
+}
+
 func TestL4LBUpdateDestinationsDropsWhenNoneAreHealthy(t *testing.T) {
 	vip4 := netip.MustParseAddr("192.0.2.10")
 	lbMAC := []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xfe}
@@ -512,6 +705,275 @@ func TestL4LBIPv6TooLargeReturnsPacketTooBig(t *testing.T) {
 	if cnt.MtuExceededPacketTotal != 1 || cnt.Icmpv6PacketTooBigTotal != 1 {
 		t.Errorf("Unexpected counters: %s", cnt)
 	}
+}
+
+func serializeIPv4TCPPacket(
+	t *testing.T,
+	srcIP netip.Addr,
+	dstIP netip.Addr,
+	srcPort uint16,
+	dstPort uint16,
+	lbMAC []byte,
+) []byte {
+	t.Helper()
+
+	eth := &layers.Ethernet{
+		SrcMAC:       []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xff},
+		DstMAC:       lbMAC,
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	ip4 := &layers.IPv4{
+		SrcIP:    srcIP.AsSlice(),
+		DstIP:    dstIP.AsSlice(),
+		Version:  4,
+		TTL:      64,
+		Protocol: layers.IPProtocolTCP,
+	}
+	tcp := &layers.TCP{
+		SrcPort: layers.TCPPort(srcPort),
+		DstPort: layers.TCPPort(dstPort),
+		SYN:     true,
+	}
+	if err := tcp.SetNetworkLayerForChecksum(ip4); err != nil {
+		t.Fatal(err)
+	}
+
+	return serializeLayers(t, eth, ip4, tcp)
+}
+
+func serializeIPv4TCPPacketWithoutEthernet(
+	t *testing.T,
+	srcIP netip.Addr,
+	dstIP netip.Addr,
+	srcPort uint16,
+	dstPort uint16,
+) []byte {
+	t.Helper()
+
+	ip4 := &layers.IPv4{
+		SrcIP:    srcIP.AsSlice(),
+		DstIP:    dstIP.AsSlice(),
+		Version:  4,
+		TTL:      64,
+		Protocol: layers.IPProtocolTCP,
+	}
+	tcp := &layers.TCP{
+		SrcPort: layers.TCPPort(srcPort),
+		DstPort: layers.TCPPort(dstPort),
+		ACK:     true,
+	}
+	if err := tcp.SetNetworkLayerForChecksum(ip4); err != nil {
+		t.Fatal(err)
+	}
+
+	return serializeLayers(t, ip4, tcp)
+}
+
+func serializeIPv4ICMPError(
+	t *testing.T,
+	srcIP netip.Addr,
+	dstIP netip.Addr,
+	lbMAC []byte,
+	quote []byte,
+) []byte {
+	t.Helper()
+
+	eth := &layers.Ethernet{
+		SrcMAC:       []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0x01},
+		DstMAC:       lbMAC,
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	ip4 := &layers.IPv4{
+		SrcIP:    srcIP.AsSlice(),
+		DstIP:    dstIP.AsSlice(),
+		Version:  4,
+		TTL:      64,
+		Protocol: layers.IPProtocolICMPv4,
+	}
+	icmp := &layers.ICMPv4{
+		TypeCode: layers.CreateICMPv4TypeCode(
+			layers.ICMPv4TypeDestinationUnreachable,
+			4,
+		),
+		Seq: 1400,
+	}
+
+	return serializeLayers(t, eth, ip4, icmp, gopacket.Payload(quote))
+}
+
+func serializeIPv6TCPPacket(
+	t *testing.T,
+	srcIP netip.Addr,
+	dstIP netip.Addr,
+	srcPort uint16,
+	dstPort uint16,
+	lbMAC []byte,
+) []byte {
+	t.Helper()
+
+	eth := &layers.Ethernet{
+		SrcMAC:       []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xff},
+		DstMAC:       lbMAC,
+		EthernetType: layers.EthernetTypeIPv6,
+	}
+	ip6 := &layers.IPv6{
+		SrcIP:      srcIP.AsSlice(),
+		DstIP:      dstIP.AsSlice(),
+		Version:    6,
+		HopLimit:   64,
+		NextHeader: layers.IPProtocolTCP,
+	}
+	tcp := &layers.TCP{
+		SrcPort: layers.TCPPort(srcPort),
+		DstPort: layers.TCPPort(dstPort),
+		SYN:     true,
+	}
+	if err := tcp.SetNetworkLayerForChecksum(ip6); err != nil {
+		t.Fatal(err)
+	}
+
+	return serializeLayers(t, eth, ip6, tcp)
+}
+
+func serializeIPv6TCPPacketWithoutEthernet(
+	t *testing.T,
+	srcIP netip.Addr,
+	dstIP netip.Addr,
+	srcPort uint16,
+	dstPort uint16,
+) []byte {
+	t.Helper()
+
+	ip6 := &layers.IPv6{
+		SrcIP:      srcIP.AsSlice(),
+		DstIP:      dstIP.AsSlice(),
+		Version:    6,
+		HopLimit:   64,
+		NextHeader: layers.IPProtocolTCP,
+	}
+	tcp := &layers.TCP{
+		SrcPort: layers.TCPPort(srcPort),
+		DstPort: layers.TCPPort(dstPort),
+		ACK:     true,
+	}
+	if err := tcp.SetNetworkLayerForChecksum(ip6); err != nil {
+		t.Fatal(err)
+	}
+
+	return serializeLayers(t, ip6, tcp)
+}
+
+func serializeIPv6ICMPError(
+	t *testing.T,
+	srcIP netip.Addr,
+	dstIP netip.Addr,
+	lbMAC []byte,
+	quote []byte,
+) []byte {
+	t.Helper()
+
+	eth := &layers.Ethernet{
+		SrcMAC:       []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0x01},
+		DstMAC:       lbMAC,
+		EthernetType: layers.EthernetTypeIPv6,
+	}
+	ip6 := &layers.IPv6{
+		SrcIP:      srcIP.AsSlice(),
+		DstIP:      dstIP.AsSlice(),
+		Version:    6,
+		HopLimit:   64,
+		NextHeader: layers.IPProtocolICMPv6,
+	}
+	icmp := &layers.ICMPv6{
+		TypeCode: layers.CreateICMPv6TypeCode(
+			layers.ICMPv6TypePacketTooBig,
+			0,
+		),
+	}
+	if err := icmp.SetNetworkLayerForChecksum(ip6); err != nil {
+		t.Fatal(err)
+	}
+	payload := binary.BigEndian.AppendUint32(nil, 1280)
+	payload = append(payload, quote...)
+
+	return serializeLayers(t, eth, ip6, icmp, gopacket.Payload(payload))
+}
+
+func serializeLayers(t *testing.T, serializable ...gopacket.SerializableLayer) []byte {
+	t.Helper()
+
+	buf := gopacket.NewSerializeBuffer()
+	if err := gopacket.SerializeLayers(
+		buf,
+		gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true},
+		serializable...,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return append([]byte(nil), buf.Bytes()...)
+}
+
+func runXDP(t *testing.T, lb *L4LB, packet []byte, want uint32) []byte {
+	t.Helper()
+
+	retval, out, err := lb.bindings.LBMain.Test(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retval != want {
+		t.Fatalf("XDP action = %s, want %s",
+			XdpRetValToString(retval), XdpRetValToString(want))
+	}
+	return out
+}
+
+func outerIPv6Destination(t *testing.T, packet []byte) netip.Addr {
+	t.Helper()
+
+	if len(packet) < 54 {
+		t.Fatalf("encapsulated packet is too short: %d", len(packet))
+	}
+	var address [16]byte
+	copy(address[:], packet[38:54])
+	return netip.AddrFrom16(address)
+}
+
+func newTestLBWithTwoCacheDestinations(
+	t *testing.T,
+	vip4 netip.Addr,
+	vip6 netip.Addr,
+	lbMAC []byte,
+) *L4LB {
+	t.Helper()
+
+	lb, err := New(&Config{
+		BinPath:     "../c/lb.o",
+		UnderlayMTU: 1500,
+		VIP4:        vip4,
+		VIP6:        vip6,
+		Dests: []DestinationEntry{
+			{
+				IPv6Addr:     netip.MustParseAddr("2001:db8::fe"),
+				HardwareAddr: lbMAC,
+			},
+			{
+				IPv6Addr: netip.MustParseAddr("2001:db8::10"),
+				HardwareAddr: []byte{
+					0x00, 0x00, 0x5e, 0x00, 0x53, 0x10,
+				},
+			},
+			{
+				IPv6Addr: netip.MustParseAddr("2001:db8::11"),
+				HardwareAddr: []byte{
+					0x00, 0x00, 0x5e, 0x00, 0x53, 0x11,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lb
 }
 
 func newTestLB(t *testing.T, vip4, vip6 netip.Addr, lbMAC []byte) *L4LB {
