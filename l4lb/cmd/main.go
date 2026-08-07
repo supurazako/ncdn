@@ -21,6 +21,7 @@ import (
 var lbBin = flag.String("lbBin", "c/lb.o", "Path to XDP lb binary")
 var xdpcapHookPath = flag.String("xdpcapHookPath", "/sys/fs/bpf/xdpcap_hook", "Path to XDPCap hook")
 var xdpif = flag.String("interface", "net0", "Interface to attach lb prog to")
+var xdpMode = flag.String("xdpMode", "auto", "XDP attach mode: auto, generic, or driver")
 var vip4 = flag.String("vip", "192.0.2.10", "IPv4 VIP address to load balance")
 var vip6 = flag.String("vip6", "2001:db8:100::10", "IPv6 VIP address to load balance")
 var deststr = flag.String("dests", "", "Comma separated list of destination IPv6 and MAC addresses. (Example: 2001:db8::10;00:00:5e:00:53:01,)")
@@ -68,6 +69,9 @@ func main() {
 	if *underlayMTU > 65535 {
 		log.Fatalf("Invalid underlay MTU: %d", *underlayMTU)
 	}
+	if *xdpMode != "auto" && *xdpMode != "generic" && *xdpMode != "driver" {
+		log.Fatalf("Invalid XDP mode: %s (want auto, generic, or driver)", *xdpMode)
+	}
 	if *healthCheckEnabled && *healthCheckInterval <= 0 {
 		log.Fatalf("Invalid health check interval: %s", *healthCheckInterval)
 	}
@@ -93,6 +97,7 @@ func main() {
 		BinPath:        *lbBin,
 		XdpCapHookPath: *xdpcapHookPath,
 		InterfaceName:  *xdpif,
+		XDPMode:        l4lbdrv.XDPMode(*xdpMode),
 		UnderlayMTU:    uint32(*underlayMTU),
 		VIP4:           netip.MustParseAddr(*vip4),
 		VIP6:           netip.MustParseAddr(*vip6),

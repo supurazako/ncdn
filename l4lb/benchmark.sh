@@ -21,7 +21,7 @@ LB_BINARY_BYTES=0
 BPF_PROGRAM_MEMLOCK_BYTES=0
 BPF_MAPS_MEMLOCK_BYTES=0
 BPF_JITED_BYTES=0
-XDP_MODE=unknown
+XDP_ATTACH_MODE=unknown
 INTERFACE_TYPE=unknown
 RX_QUEUES=unknown
 TX_QUEUES=unknown
@@ -174,11 +174,11 @@ function read_xdp_metadata() {
     link_json=$(sudo ip netns exec LB ip -json link show net0)
     xdp_mode_num=$(jq -r '.[0].xdp.mode // 0' <<<"${link_json}")
     if [ "${xdp_mode_num}" = "1" ]; then
-        XDP_MODE=generic
+        XDP_ATTACH_MODE=generic
     elif [ "${xdp_mode_num}" = "2" ]; then
-        XDP_MODE=driver
+        XDP_ATTACH_MODE=driver
     elif [ "${xdp_mode_num}" = "4" ]; then
-        XDP_MODE=offload
+        XDP_ATTACH_MODE=offload
     fi
     INTERFACE_TYPE=$(jq -r '.[0].link_type // "unknown"' <<<"${link_json}")
     queue_line=$(printf '%s\n' "${link_info}" | awk '/numrxqueues/ { print; exit }')
@@ -357,7 +357,7 @@ function run_case() {
         -v bpf_program_memlock_bytes="${BPF_PROGRAM_MEMLOCK_BYTES}" \
         -v bpf_maps_memlock_bytes="${BPF_MAPS_MEMLOCK_BYTES}" \
         -v bpf_jited_bytes="${BPF_JITED_BYTES}" \
-        -v xdp_mode="${XDP_MODE}" \
+        -v xdp_mode="${XDP_ATTACH_MODE}" \
         -v interface_type="${INTERFACE_TYPE}" \
         -v rx_queues="${RX_QUEUES}" \
         -v tx_queues="${TX_QUEUES}" \

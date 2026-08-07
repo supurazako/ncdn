@@ -19,6 +19,7 @@ import (
 type Config struct {
 	BinPath        string
 	InterfaceName  string
+	XDPMode        XDPMode
 	XdpCapHookPath string
 	UnderlayMTU    uint32
 
@@ -74,7 +75,7 @@ func New(cfg *Config) (*L4LB, error) {
 		link = l
 	}
 	if link != nil {
-		a, err := AttachToLink(link, bindings.LBMain.FD())
+		a, err := AttachToLink(link, bindings.LBMain.FD(), cfg.XDPMode)
 		if err != nil {
 			return nil, multierr.Combine(err, bindings.Close())
 		}
