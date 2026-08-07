@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(readlink -f "$(dirname "$0")")
 DURATION=${DURATION:-10}
+THROUGHPUT_WARMUP_DURATION=${THROUGHPUT_WARMUP_DURATION:-2}
 PARALLEL=${PARALLEL:-4}
 PORT=${PORT:-5201}
 PACKET_RATES=${PACKET_RATES:-${PACKET_RATE:-"100000 250000 500000 1000000"}}
@@ -255,6 +256,8 @@ function run_case() {
     echo "Running ${family} ${profile} benchmark (target=${target_rate}, repetition=${repetition})..." >&2
     if [ "${profile}" = "throughput" ]; then
         start_servers "${family}" "${vip}"
+        run_client "${family}" "${vip}" "${THROUGHPUT_WARMUP_DURATION}" \
+            "${TMP_DIR}/${case_name}-warmup.csv"
     else
         stop_servers
         run_packet_generator "${family}" "${vip}" "${WARMUP_DURATION}" \
@@ -369,6 +372,7 @@ function run_case() {
 }
 
 require_positive_integer DURATION "${DURATION}"
+require_positive_integer THROUGHPUT_WARMUP_DURATION "${THROUGHPUT_WARMUP_DURATION}"
 require_positive_integer PARALLEL "${PARALLEL}"
 require_positive_integer PORT "${PORT}"
 require_positive_integer REPETITIONS "${REPETITIONS}"

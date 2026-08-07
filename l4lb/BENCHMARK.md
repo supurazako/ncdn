@@ -16,6 +16,8 @@ $ DURATION=10 PARALLEL=4 ./benchmark.sh | tee /tmp/l4lb-baseline.csv
 
 各条件は標準で3回測定し、`packet-rate`の本計測前には1秒間のwarm-upを行う。測定回数は`REPETITIONS`、warm-up時間は`WARMUP_DURATION`、空白区切りの送信目標は`PACKET_RATES`で変更できる。従来の単一値`PACKET_RATE`も利用できる。
 
+`throughput`でも本計測前にTCP warm-upを行う。時間は`THROUGHPUT_WARMUP_DURATION`で変更できる。
+
 主な列は次のとおり。
 
 - `ingress_pps`: LBの`net0`が受信したpacket rate
