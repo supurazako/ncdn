@@ -31,6 +31,7 @@ XDPは宛先と対応状況によって処理を分ける。
 |---|---|
 | VIP以外 | `XDP_PASS`で通常のLinux処理へ渡す |
 | VIP宛てTCP | IPv6でencapして`XDP_TX` |
+| VIP宛てICMP error（対応するDSR TCP flowを引用） | 該当するPoP cacheへIPv6でencapして`XDP_TX` |
 | VIP宛ての未対応プロトコル | `XDP_DROP` |
 | VIP宛てIPv4 Options付き | `XDP_DROP` |
 | VIP宛てIPv6拡張ヘッダー付き | `XDP_DROP` |
@@ -38,7 +39,7 @@ XDPは宛先と対応状況によって処理を分ける。
 
 LBのloopbackにもIPv4/IPv6 VIPを設定する。通常のVIP宛てTCPはXDPで処理されるためLinuxまでは到達しない。このlocal routeは、設定不備などでVIP宛てパケットが誤って`XDP_PASS`された場合に、デフォルトルートでRへ戻り、RとLBの間をループすることを防ぐための安全策である。
 
-現在、外部からVIPへ届くICMP/ICMPv6は未対応プロトコルとしてDROPする。L4LB自身がサイズ超過時に利用者へ返すFragmentation Needed / Packet Too Bigは実装済みだが、DSRの戻り通信に対して外部から返ってくるICMPエラーをC0/C1へ配送する処理は未実装である。
+L4LB自身がサイズ超過時に利用者へ返すFragmentation Needed / Packet Too Bigに加え、DSRの戻り通信に対して外部から返ってくるICMP errorをC0/C1へ配送する。echo requestなどのICMP error以外や、対応するTCP flowを引用していないpacketはDROPする。
 
 | 用途 | IPv4 | IPv6 |
 |---|---|---|
@@ -114,6 +115,42 @@ ICMPv4応答は元のIPv4ヘッダーと続く8バイトを引用する。ICMPv6
 - `Icmpv4FragNeededTotal`
 - `Icmpv6PacketTooBigTotal`
 
+### DSRの戻り通信に対するICMP error
+
+C0/C1から利用者へのresponseはL4LBを通らず、DSRで直接返る。このresponseに対してrouterや利用者から返されたICMP errorは宛先がVIPであるため、L4LBへ到着する。
+
+ICMP errorが引用するTCP responseには、送信元VIP、宛先client address、宛先client portが含まれる。L4LBはclient addressとclient portから通常の往路と同じhash keyを再構成し、選択されたcache nodeへICMP error全体をIPv6でencapする。IPv4のICMP errorはIPv4-in-IPv6、IPv6のICMPv6 errorはIPv6-in-IPv6となる。cache nodeの`v6tun0`がdecapし、VIPを持つlocal network stackへ渡す。
+
+対応するerror typeは次の通り。
+
+| IP family | error type |
+|---|---|
+| IPv4 | Destination Unreachable、Time Exceeded、Parameter Problem |
+| IPv6 | Destination Unreachable、Packet Too Big、Time Exceeded、Parameter Problem |
+
+引用されたpacketは、送信元が対応するVIP、IP headerの直後がTCPであることを確認する。条件を満たさないerrorはDROPする。
+
+次のカウンターで配送結果を確認できる。
+
+- `Icmpv4ErrorForwardedTotal`
+- `Icmpv6ErrorForwardedTotal`
+- `InvalidIcmpErrorTotal`
+
+現在のL4LBはconnection stateを保持せず、現在のdestination数に対してhashを再計算する。そのため、元のTCP packetを転送してからICMP errorを受信するまでにdestination集合が変化すると、元とは異なるcache nodeへ配送する可能性がある。
+
+模擬環境では、利用者側に出るRのlink MTUをIPv6最小MTUの1280へ一時的に下げ、大きなobjectを取得してPMTUDを確認できる。
+
+```bash
+sudo ip -n R link set netU mtu 1280
+sudo ip netns exec U curl --noproxy "*" -4 -fsS --max-time 12 -o /dev/null \
+  "http://192.0.2.10:8889/tailwind.v2.2.19.min.css?pmtu-v4=$(date +%s%N)"
+sudo ip netns exec U curl --noproxy "*" -g -6 -fsS --max-time 12 -o /dev/null \
+  "http://[2001:db8:100::10]:8889/tailwind.v2.2.19.min.css?pmtu-v6=$(date +%s%N)"
+sudo ip -n R link set netU mtu 1500
+```
+
+どちらも、最初の大きなTCP responseに対してRがMTU 1280のICMP errorを返す。errorが元のcache nodeへ届くとTCPが送信packetを小さくし、downloadが完了する。確認後は、IPv4/IPv6両方を同じinterfaceで継続利用するためMTUを1500へ戻す。
+
 ### TCP MSSによる予防
 
 C0/C1から利用者へ向かうデフォルトルートには、IPファミリーごとに計算した`advmss`を設定する。デフォルトのunderlay MTU 1500では次の値になる。
@@ -167,8 +204,7 @@ sudo ./netns_setup.sh --ipv6-only
 
 - L4LBが扱うトランスポートプロトコルはTCPのみ
 - IPv6拡張ヘッダーは未対応で、IPv6ヘッダーの直後にTCPがあるパケットを扱う
-- VIP宛てのUDP、受信ICMP/ICMPv6、IPv4 Options、IPv6拡張ヘッダー付きパケットはDROPする
-- DSRの戻り通信に対するICMPエラーをcache nodeへ配送する処理は未実装
+- VIP宛てのUDP、対応するDSR TCP flowを引用しないICMP/ICMPv6、IPv4 Options、IPv6拡張ヘッダー付きパケットはDROPする
 - IPv6 encapによる40バイトの増加に対し、内側MTU 1460、TCP MSS通知、ICMPによるPath MTU Discoveryを実装している
 - DSRの戻り方向は利用者と同じIPファミリーを使うため、IPv4利用者への戻り経路までIPv6-onlyになるわけではない
 - DNSのAAAA応答はまだこの段階に含めていない
