@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -122,9 +127,160 @@ func TestCachingTransportStreamsLargeResponseWithoutCaching(t *testing.T) {
 	}
 }
 
+func TestCachingTransportCoalescesConcurrentMisses(t *testing.T) {
+	const requestCount = 8
+
+	originStarted := make(chan struct{})
+	releaseOrigin := make(chan struct{})
+	var startedOnce sync.Once
+	var originRequests atomic.Int64
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		originRequests.Add(1)
+		startedOnce.Do(func() { close(originStarted) })
+		<-releaseOrigin
+
+		return originResponse(req, "from origin"), nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+	results := make(chan requestResult, requestCount)
+
+	go requestInBackground(transport, context.Background(), results)
+	waitForSignal(t, originStarted, "Origin request did not start")
+	for range requestCount - 1 {
+		go requestInBackground(transport, context.Background(), results)
+	}
+	waitForMissWaiters(t, transport, requestCount-1)
+	close(releaseOrigin)
+
+	hits := 0
+	misses := 0
+	for range requestCount {
+		result := waitForRequestResult(t, results)
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.response.body != "from origin" {
+			t.Fatalf("unexpected body: %q", result.response.body)
+		}
+		switch result.response.cacheStatus {
+		case "HIT":
+			hits++
+		case "MISS":
+			misses++
+		default:
+			t.Fatalf("unexpected cache status: %q", result.response.cacheStatus)
+		}
+	}
+
+	if got := originRequests.Load(); got != 1 {
+		t.Fatalf("origin requests: got %d, want 1", got)
+	}
+	if hits != requestCount-1 || misses != 1 {
+		t.Fatalf("cache statuses: got %d HIT and %d MISS", hits, misses)
+	}
+}
+
+func TestCachingTransportSharesOriginErrorAndAllowsRetry(t *testing.T) {
+	const requestCount = 4
+
+	originStarted := make(chan struct{})
+	releaseOrigin := make(chan struct{})
+	var startedOnce sync.Once
+	var originRequests atomic.Int64
+	var failOrigin atomic.Bool
+	failOrigin.Store(true)
+	originErr := errors.New("Origin is unavailable")
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		originRequests.Add(1)
+		startedOnce.Do(func() { close(originStarted) })
+		<-releaseOrigin
+		if failOrigin.Load() {
+			return nil, originErr
+		}
+
+		return originResponse(req, "recovered"), nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+	results := make(chan requestResult, requestCount)
+
+	go requestInBackground(transport, context.Background(), results)
+	waitForSignal(t, originStarted, "Origin request did not start")
+	for range requestCount - 1 {
+		go requestInBackground(transport, context.Background(), results)
+	}
+	waitForMissWaiters(t, transport, requestCount-1)
+	close(releaseOrigin)
+
+	for range requestCount {
+		result := waitForRequestResult(t, results)
+		if !errors.Is(result.err, originErr) {
+			t.Fatalf("request error: got %v, want %v", result.err, originErr)
+		}
+	}
+	if got := originRequests.Load(); got != 1 {
+		t.Fatalf("origin requests after failure: got %d, want 1", got)
+	}
+
+	failOrigin.Store(false)
+	retry := performRequest(t, transport, http.MethodGet)
+	if retry.body != "recovered" || retry.cacheStatus != "MISS" {
+		t.Fatalf("unexpected retry response: %+v", retry)
+	}
+	if got := originRequests.Load(); got != 2 {
+		t.Fatalf("origin requests after retry: got %d, want 2", got)
+	}
+}
+
+func TestCachingTransportAllowsWaiterCancellation(t *testing.T) {
+	originStarted := make(chan struct{})
+	releaseOrigin := make(chan struct{})
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		close(originStarted)
+		<-releaseOrigin
+		return originResponse(req, "from origin"), nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+	leaderResult := make(chan requestResult, 1)
+	go requestInBackground(transport, context.Background(), leaderResult)
+	waitForSignal(t, originStarted, "Origin request did not start")
+
+	waiterContext, cancelWaiter := context.WithCancel(context.Background())
+	waiterResult := make(chan requestResult, 1)
+	go requestInBackground(transport, waiterContext, waiterResult)
+	waitForMissWaiters(t, transport, 1)
+	cancelWaiter()
+
+	result := waitForRequestResult(t, waiterResult)
+	if !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("waiter error: got %v, want %v", result.err, context.Canceled)
+	}
+
+	close(releaseOrigin)
+	if result := waitForRequestResult(t, leaderResult); result.err != nil {
+		t.Fatal(result.err)
+	}
+}
+
 type observedResponse struct {
 	body        string
 	cacheStatus string
+}
+
+type requestResult struct {
+	response observedResponse
+	err      error
 }
 
 func performRequest(
@@ -134,24 +290,114 @@ func performRequest(
 ) observedResponse {
 	t.Helper()
 
-	req, err := http.NewRequest(method, "http://origin.example/object", nil)
+	result := performRequestWithContext(transport, context.Background(), method)
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	return result.response
+}
+
+func performRequestWithContext(
+	transport http.RoundTripper,
+	ctx context.Context,
+	method string,
+) requestResult {
+	req, err := http.NewRequestWithContext(
+		ctx,
+		method,
+		"http://origin.example/object",
+		nil,
+	)
 	if err != nil {
-		t.Fatal(err)
+		return requestResult{err: err}
 	}
 
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
-		t.Fatal(err)
+		return requestResult{err: err}
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatal(err)
+		return requestResult{err: err}
 	}
 
-	return observedResponse{
-		body:        string(body),
-		cacheStatus: resp.Header.Get(cacheStatusHeader),
+	return requestResult{
+		response: observedResponse{
+			body:        string(body),
+			cacheStatus: resp.Header.Get(cacheStatusHeader),
+		},
+	}
+}
+
+func requestInBackground(
+	transport http.RoundTripper,
+	ctx context.Context,
+	results chan<- requestResult,
+) {
+	results <- performRequestWithContext(transport, ctx, http.MethodGet)
+}
+
+func originResponse(req *http.Request, body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}
+}
+
+func waitForMissWaiters(
+	t *testing.T,
+	transport *cachingTransport,
+	want int,
+) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	const key = "http://origin.example/object"
+	for {
+		transport.misses.mu.Lock()
+		flight := transport.misses.flights[key]
+		got := 0
+		if flight != nil {
+			got = flight.waiters
+		}
+		transport.misses.mu.Unlock()
+
+		if got >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("miss waiters: got %d, want at least %d", got, want)
+		}
+		runtime.Gosched()
+	}
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}, message string) {
+	t.Helper()
+
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal(message)
+	}
+}
+
+func waitForRequestResult(
+	t *testing.T,
+	results <-chan requestResult,
+) requestResult {
+	t.Helper()
+
+	select {
+	case result := <-results:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("request did not finish")
+		return requestResult{}
 	}
 }

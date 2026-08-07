@@ -11,9 +11,10 @@ import (
 const cacheStatusHeader = "X-NCDN-Cache"
 
 type cachingTransport struct {
-	base  http.RoundTripper
-	cache *memoryCache
-	ttl   time.Duration
+	base   http.RoundTripper
+	cache  *memoryCache
+	ttl    time.Duration
+	misses missGroup
 }
 
 type readerWithCloser struct {
@@ -44,18 +45,53 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 	key := req.URL.String()
 	if entry, ok := t.cache.get(key); ok {
-		entry.header.Set(cacheStatusHeader, "HIT")
-
-		return &http.Response{
-			StatusCode:    entry.statusCode,
-			Status:        formatHTTPStatus(entry.statusCode),
-			Header:        entry.header,
-			Body:          io.NopCloser(bytes.NewReader(entry.body)),
-			ContentLength: int64(len(entry.body)),
-			Request:       req,
-		}, nil
+		return responseFromCache(req, entry), nil
 	}
 
+	flight, leader := t.misses.acquire(key)
+	if !leader {
+		select {
+		case <-flight.done:
+			if flight.err != nil {
+				return nil, flight.err
+			}
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		}
+
+		if entry, ok := t.cache.get(key); ok {
+			return responseFromCache(req, entry), nil
+		}
+
+		// The completed response was not cacheable. Fetch a response for this
+		// request without starting another round of waiting.
+		return t.fetchFromOrigin(req, key)
+	}
+
+	return t.fillCache(req, key, flight)
+}
+
+func (t *cachingTransport) fillCache(
+	req *http.Request,
+	key string,
+	flight *missFlight,
+) (resp *http.Response, err error) {
+	defer func() {
+		t.misses.finish(key, flight, err)
+	}()
+
+	// The cache may have been filled between the first lookup and acquire.
+	if entry, ok := t.cache.get(key); ok {
+		return responseFromCache(req, entry), nil
+	}
+
+	return t.fetchFromOrigin(req, key)
+}
+
+func (t *cachingTransport) fetchFromOrigin(
+	req *http.Request,
+	key string,
+) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return nil, err
@@ -97,6 +133,19 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	entry.body = body
 	t.cache.set(key, entry, t.ttl)
 	return resp, nil
+}
+
+func responseFromCache(req *http.Request, entry cacheEntry) *http.Response {
+	entry.header.Set(cacheStatusHeader, "HIT")
+
+	return &http.Response{
+		StatusCode:    entry.statusCode,
+		Status:        formatHTTPStatus(entry.statusCode),
+		Header:        entry.header,
+		Body:          io.NopCloser(bytes.NewReader(entry.body)),
+		ContentLength: int64(len(entry.body)),
+		Request:       req,
+	}
 }
 
 func setCacheStatus(resp *http.Response, status string) {
