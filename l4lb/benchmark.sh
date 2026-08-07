@@ -21,6 +21,10 @@ LB_BINARY_BYTES=0
 BPF_PROGRAM_MEMLOCK_BYTES=0
 BPF_MAPS_MEMLOCK_BYTES=0
 BPF_JITED_BYTES=0
+XDP_MODE=unknown
+INTERFACE_TYPE=unknown
+RX_QUEUES=unknown
+TX_QUEUES=unknown
 TMP_DIR=$(mktemp -d)
 
 function cleanup() {
@@ -161,6 +165,27 @@ function read_static_resource_usage() {
         map_memlock=$(jq -r '.bytes_memlock // 0' <<<"${map_info}")
         BPF_MAPS_MEMLOCK_BYTES=$((BPF_MAPS_MEMLOCK_BYTES + map_memlock))
     done < <(jq -r '.map_ids[]?' <<<"${program_info}")
+}
+
+function read_xdp_metadata() {
+    local link_info queue_line xdp_mode_num link_json
+
+    link_info=$(sudo ip netns exec LB ip -details link show net0)
+    link_json=$(sudo ip netns exec LB ip -json link show net0)
+    xdp_mode_num=$(jq -r '.[0].xdp.mode // 0' <<<"${link_json}")
+    if [ "${xdp_mode_num}" = "1" ]; then
+        XDP_MODE=generic
+    elif [ "${xdp_mode_num}" = "2" ]; then
+        XDP_MODE=driver
+    elif [ "${xdp_mode_num}" = "4" ]; then
+        XDP_MODE=offload
+    fi
+    INTERFACE_TYPE=$(jq -r '.[0].link_type // "unknown"' <<<"${link_json}")
+    queue_line=$(printf '%s\n' "${link_info}" | awk '/numrxqueues/ { print; exit }')
+    RX_QUEUES=$(awk '{ for (i = 1; i <= NF; i++) if ($i == "numrxqueues") print $(i + 1) }' <<<"${queue_line}")
+    TX_QUEUES=$(awk '{ for (i = 1; i <= NF; i++) if ($i == "numtxqueues") print $(i + 1) }' <<<"${queue_line}")
+    RX_QUEUES=${RX_QUEUES:-unknown}
+    TX_QUEUES=${TX_QUEUES:-unknown}
 }
 
 function start_servers() {
@@ -332,6 +357,10 @@ function run_case() {
         -v bpf_program_memlock_bytes="${BPF_PROGRAM_MEMLOCK_BYTES}" \
         -v bpf_maps_memlock_bytes="${BPF_MAPS_MEMLOCK_BYTES}" \
         -v bpf_jited_bytes="${BPF_JITED_BYTES}" \
+        -v xdp_mode="${XDP_MODE}" \
+        -v interface_type="${INTERFACE_TYPE}" \
+        -v rx_queues="${RX_QUEUES}" \
+        -v tx_queues="${TX_QUEUES}" \
         'BEGIN {
             seconds = elapsed_ns / 1000000000
             if (profile == "packet-rate") {
@@ -362,8 +391,9 @@ function run_case() {
             if (cpu_total_delta > 0) {
                 cpu = (cpu_total_delta - cpu_idle_delta) * 100 / cpu_total_delta
             }
-            printf "%s,%s,%d,%s,%.3f,%d,%d,%.0f,%s,%d,%d,%.4f,%s,%.6f,%s,%d,%.2f,%d,%d,%d,%d,%d,%d\n", \
-                family, profile, repetition, target_pps, seconds, parallel, packets, pps, \
+            printf "%s,%s,%d,%s,%s,%s,%s,%s,%.3f,%d,%d,%.0f,%s,%d,%d,%.4f,%s,%.6f,%s,%d,%.2f,%d,%d,%d,%d,%d,%d\n", \
+                family, profile, repetition, target_pps, xdp_mode, interface_type, rx_queues, tx_queues, \
+                seconds, parallel, packets, pps, \
                 target_achievement_percent, forwarded_packets, forwarding_dropped_packets, \
                 forwarding_drop_percent, sustainable, ingress_gbps, tcp_throughput_gbps, drops, cpu, \
                 l4lb_rss_kib, l4lb_peak_rss_kib, l4lb_binary_bytes, \
@@ -444,7 +474,8 @@ go run "${SCRIPT_DIR}/benchmarkpkt" -family ipv6 \
     -src-ip 2001:db8:0:2::200 -dst-ip 2001:db8:100::10 \
     -src-mac "${u_mac}" -dst-mac "${r_mac}" -output "${TMP_DIR}/ipv6.pcap"
 
-echo "family,profile,repetition,target_pps,duration_seconds,parallel,ingress_packets,ingress_pps,target_achievement_percent,forwarded_packets,forwarding_dropped_packets,forwarding_drop_percent,sustainable,ingress_gbps,tcp_throughput_gbps,rx_dropped,host_cpu_busy_percent,l4lb_rss_kib,l4lb_peak_rss_kib,l4lb_binary_bytes,bpf_program_memlock_bytes,bpf_maps_memlock_bytes,bpf_jited_bytes"
+read_xdp_metadata
+echo "family,profile,repetition,target_pps,xdp_mode,interface_type,rx_queues,tx_queues,duration_seconds,parallel,ingress_packets,ingress_pps,target_achievement_percent,forwarded_packets,forwarding_dropped_packets,forwarding_drop_percent,sustainable,ingress_gbps,tcp_throughput_gbps,rx_dropped,host_cpu_busy_percent,l4lb_rss_kib,l4lb_peak_rss_kib,l4lb_binary_bytes,bpf_program_memlock_bytes,bpf_maps_memlock_bytes,bpf_jited_bytes"
 for family in ipv4 ipv6; do
     if [ "${family}" = "ipv4" ]; then
         vip=192.0.2.10

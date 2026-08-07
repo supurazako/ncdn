@@ -20,6 +20,7 @@ $ DURATION=10 PARALLEL=4 ./benchmark.sh | tee /tmp/l4lb-baseline.csv
 
 主な列は次のとおり。
 
+- `xdp_mode`、`interface_type`、`rx_queues`、`tx_queues`: 測定時のXDP attach modeとinterface情報。実機とveth模擬環境の結果を区別するために記録する
 - `ingress_pps`: LBの`net0`が受信したpacket rate
 - `forwarded_packets`: C0/C1の`tunnel` interfaceへ到達したpacket数の合計
 - `forwarding_drop_percent`: `(ingress_packets - forwarded_packets) / ingress_packets`。負値は計測noiseとして0に丸める
