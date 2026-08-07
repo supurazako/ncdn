@@ -25,6 +25,7 @@ var vip4 = flag.String("vip", "192.0.2.10", "IPv4 VIP address to load balance")
 var vip6 = flag.String("vip6", "2001:db8:100::10", "IPv6 VIP address to load balance")
 var deststr = flag.String("dests", "", "Comma separated list of destination IPv6 and MAC addresses. (Example: 2001:db8::10;00:00:5e:00:53:01,)")
 var underlayMTU = flag.Uint("underlayMTU", 0, "Required MTU of the IPv6 path from the L4LB to cache nodes")
+var healthCheckEnabled = flag.Bool("healthCheckEnabled", true, "Enable cache destination health checks")
 var healthCheckInterval = flag.Duration("healthCheckInterval", time.Second, "Interval between cache destination health checks")
 var healthCheckTimeout = flag.Duration("healthCheckTimeout", 300*time.Millisecond, "Timeout for each cache destination health check")
 var healthCheckFailures = flag.Int("healthCheckFailures", 3, "Consecutive health check failures before removing a cache destination")
@@ -67,19 +68,19 @@ func main() {
 	if *underlayMTU > 65535 {
 		log.Fatalf("Invalid underlay MTU: %d", *underlayMTU)
 	}
-	if *healthCheckInterval <= 0 {
+	if *healthCheckEnabled && *healthCheckInterval <= 0 {
 		log.Fatalf("Invalid health check interval: %s", *healthCheckInterval)
 	}
-	if *healthCheckTimeout <= 0 {
+	if *healthCheckEnabled && *healthCheckTimeout <= 0 {
 		log.Fatalf("Invalid health check timeout: %s", *healthCheckTimeout)
 	}
 	if *healthCheckPort > 65535 {
 		log.Fatalf("Invalid health check port: %d", *healthCheckPort)
 	}
-	if *healthCheckFailures <= 0 {
+	if *healthCheckEnabled && *healthCheckFailures <= 0 {
 		log.Fatalf("Invalid health check failure threshold: %d", *healthCheckFailures)
 	}
-	if *healthCheckSuccesses <= 0 {
+	if *healthCheckEnabled && *healthCheckSuccesses <= 0 {
 		log.Fatalf("Invalid health check success threshold: %d", *healthCheckSuccesses)
 	}
 
@@ -103,21 +104,33 @@ func main() {
 	}
 	slog.Info("L4LB started.")
 	defer lb.Close()
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	defer transport.CloseIdleConnections()
-	checker, err := newHealthChecker(
-		lb,
-		dests,
-		httpBackendProbe(&http.Client{
-			Transport: transport,
-			Timeout:   *healthCheckTimeout,
-		}, uint16(*healthCheckPort)),
-		*healthCheckFailures,
-		*healthCheckSuccesses,
-	)
-	if err != nil {
-		log.Fatalf("Invalid health check configuration: %v", err)
+	var checker *healthChecker
+	var healthCheckC <-chan time.Time
+	if *healthCheckEnabled {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		defer transport.CloseIdleConnections()
+		checker, err = newHealthChecker(
+			lb,
+			dests,
+			httpBackendProbe(&http.Client{
+				Transport: transport,
+				Timeout:   *healthCheckTimeout,
+			}, uint16(*healthCheckPort)),
+			*healthCheckFailures,
+			*healthCheckSuccesses,
+		)
+		if err != nil {
+			log.Fatalf("Invalid health check configuration: %v", err)
+		}
+		healthTicker := time.NewTicker(*healthCheckInterval)
+		defer healthTicker.Stop()
+		healthCheckC = healthTicker.C
+		if err := checker.check(context.Background()); err != nil {
+			slog.Error("Failed to update cache destinations", "err", err)
+		}
+	} else {
+		slog.Info("Cache destination health checks disabled.")
 	}
 
 	done := make(chan os.Signal, 1)
@@ -125,11 +138,6 @@ func main() {
 
 	counterTicker := time.NewTicker(time.Second)
 	defer counterTicker.Stop()
-	healthTicker := time.NewTicker(*healthCheckInterval)
-	defer healthTicker.Stop()
-	if err := checker.check(context.Background()); err != nil {
-		slog.Error("Failed to update cache destinations", "err", err)
-	}
 	for {
 		select {
 		case <-counterTicker.C:
@@ -138,7 +146,7 @@ func main() {
 			}
 			continue
 
-		case <-healthTicker.C:
+		case <-healthCheckC:
 			if err := checker.check(context.Background()); err != nil {
 				slog.Error("Failed to update cache destinations", "err", err)
 			}
