@@ -20,7 +20,7 @@
 // We use clang built-in memcpy, but need a function signature to provoke it.
 void* memcpy(void*, const void*, unsigned long);
 
-#define DEBUG_LB_MAIN 1
+#define DEBUG_LB_MAIN 0
 
 #define ICMPV4_DEST_UNREACHABLE 3
 #define ICMPV4_FRAGMENTATION_NEEDED 4

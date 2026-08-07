@@ -76,9 +76,20 @@ function require_command() {
 }
 
 function stop_servers() {
+    local ns
+
     for ns in C0 C1; do
         sudo ip netns exec "${ns}" pkill -x iperf >/dev/null 2>&1 || true
     done
+    for _ in $(seq 1 20); do
+        if ! sudo ip netns exec C0 pgrep -x iperf >/dev/null 2>&1 && \
+            ! sudo ip netns exec C1 pgrep -x iperf >/dev/null 2>&1; then
+            return
+        fi
+        sleep 0.1
+    done
+    echo "Timed out waiting for iperf servers to stop" >&2
+    exit 1
 }
 
 function read_lb_stat() {
@@ -166,7 +177,15 @@ function start_servers() {
             iperf "${family_args[@]}" -s -B "${vip}" -p "${PORT}" -D \
             >/dev/null 2>&1
     done
-    sleep 0.2
+    for _ in $(seq 1 20); do
+        if sudo ip netns exec C0 pgrep -x iperf >/dev/null 2>&1 && \
+            sudo ip netns exec C1 pgrep -x iperf >/dev/null 2>&1; then
+            return
+        fi
+        sleep 0.1
+    done
+    echo "Timed out waiting for iperf servers to start" >&2
+    exit 1
 }
 
 function run_client() {
@@ -270,6 +289,11 @@ function run_case() {
     l4lb_peak_rss_kib=$(read_l4lb_memory_kib VmHWM)
 
     elapsed_ns=$((time_after - time_before))
+    if [ "${profile}" = "throughput" ] && [ "${elapsed_ns}" -lt "$((DURATION * 800000000))" ]; then
+        echo "iperf finished too early for ${family}: ${elapsed_ns}ns" >&2
+        cat "${output}.stderr" >&2
+        exit 1
+    fi
     cpu_total_delta=$((cpu_total_after - cpu_total_before))
     cpu_idle_delta=$((cpu_idle_after - cpu_idle_before))
     iperf_bits_per_second=0
