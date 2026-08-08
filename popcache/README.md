@@ -34,10 +34,10 @@ freshnessを過ぎたresponseは、`ETag`または`Last-Modified`があれば条
 ./popcache/benchmark-http.sh
 ```
 
-測定条件は環境変数で変更できる。各回のレイテンシ分布は`OUTPUT_DIR`（既定値`/tmp/ncdn-http-benchmark`）にCSVで保存する。
+測定条件は環境変数で変更できる。各回のレイテンシ分布は`OUTPUT_DIR`（既定値`/tmp/ncdn-http-benchmark`）にCSVで保存する。`CONCURRENCIES`にカンマ区切りで複数の同時接続数を指定すると、同じ条件で飽和点を比較できる。
 
 ```sh
-URL=http://127.0.0.1:8889/json REQUESTS=50000 CONCURRENCY=200 RUNS=5 \
+URL=http://127.0.0.1:8889/json REQUESTS=50000 CONCURRENCIES=50,100,200 RUNS=5 \
   OUTPUT_DIR=/tmp/ncdn-benchmark ./popcache/benchmark-http.sh
 ```
 
