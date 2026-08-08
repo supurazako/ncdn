@@ -27,3 +27,5 @@ freshnessを過ぎたresponseは、`ETag`または`Last-Modified`があれば条
 レスポンスに`Vary`がある場合は、指定されたrequest headerの値ごとにcache variantを分離する。`Vary: *`のレスポンスは保存しない。
 
 現在の使用量と設定値は`/statusz`の`cache`で確認できる。
+
+HTTP/3は実験的に有効化できる。`-http3ListenAddr`、`-http3CertFile`、`-http3KeyFile`を指定すると、HTTP/1.1と同じhandlerをQUIC上でも公開する。HTTP/3の入口は現在のL4LBとは独立しており、UDP/443の転送や実機でのQUIC疎通は別途確認が必要である。
