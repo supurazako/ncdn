@@ -11,6 +11,7 @@ import (
 
 type cacheEntry struct {
 	statusCode int
+	status     string
 	header     http.Header
 	body       []byte
 	storedAt   time.Time
@@ -274,7 +275,7 @@ func (c *memoryCache) removeElementLocked(element *list.Element) {
 // cacheEntrySize counts the response bytes retained by the cache. Go map,
 // list and allocation overhead are intentionally excluded from this value.
 func cacheEntrySize(key string, entry cacheEntry) int64 {
-	sizeBytes := int64(len(key) + len(entry.body))
+	sizeBytes := int64(len(key) + len(entry.status) + len(entry.body))
 	for name, values := range entry.header {
 		sizeBytes += int64(len(name))
 		for _, value := range values {

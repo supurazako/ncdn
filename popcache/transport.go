@@ -153,6 +153,7 @@ func (t *cachingTransport) fetchFromOrigin(
 	header.Del(cacheStatusHeader)
 	entry := cacheEntry{
 		statusCode:           resp.StatusCode,
+		status:               formatHTTPStatus(resp.StatusCode),
 		header:               header,
 		freshnessLifetime:    freshnessLifetime(resp, t.ttl, responseReceivedAt),
 		freshnessLifetimeSet: true,
@@ -282,10 +283,14 @@ func responseFromCacheAt(req *http.Request, entry cacheEntry, status string, now
 	header := entry.header.Clone()
 	header.Set(cacheStatusHeader, status)
 	header.Set("Age", strconv.FormatInt(int64(entry.currentAge(now)/time.Second), 10))
+	statusText := entry.status
+	if statusText == "" {
+		statusText = formatHTTPStatus(entry.statusCode)
+	}
 
 	return &http.Response{
 		StatusCode:    entry.statusCode,
-		Status:        formatHTTPStatus(entry.statusCode),
+		Status:        statusText,
 		Header:        header,
 		Body:          io.NopCloser(bytes.NewReader(entry.body)),
 		ContentLength: int64(len(entry.body)),
