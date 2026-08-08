@@ -12,7 +12,13 @@ type cacheEntry struct {
 	statusCode int
 	header     http.Header
 	body       []byte
-	expiresAt  time.Time
+	storedAt   time.Time
+	initialAge time.Duration
+	// freshnessLifetimeSet distinguishes an explicit max-age=0 from an
+	// entry created directly by tests or older callers that needs the TTL
+	// fallback supplied to set.
+	freshnessLifetime    time.Duration
+	freshnessLifetimeSet bool
 }
 
 type cacheItem struct {
@@ -73,7 +79,7 @@ func (c *memoryCache) get(key string) (cacheEntry, bool) {
 	}
 
 	item := element.Value.(*cacheItem)
-	if !time.Now().Before(item.entry.expiresAt) {
+	if !item.entry.isFresh(time.Now()) {
 		c.removeElementLocked(element)
 		return cacheEntry{}, false
 	}
@@ -87,7 +93,10 @@ func (c *memoryCache) set(
 	entry cacheEntry,
 	ttl time.Duration,
 ) bool {
-	entry.expiresAt = time.Now().Add(ttl)
+	if !entry.freshnessLifetimeSet {
+		entry.freshnessLifetime = ttl
+	}
+	entry.storedAt = time.Now()
 	sizeBytes := cacheEntrySize(key, entry)
 	if sizeBytes > c.maxObjectBytes || sizeBytes > c.maxBytes {
 		return false
@@ -121,6 +130,21 @@ func (c *memoryCache) set(
 	return true
 }
 
+func (entry cacheEntry) currentAge(now time.Time) time.Duration {
+	age := entry.initialAge
+	if !entry.storedAt.IsZero() {
+		age += now.Sub(entry.storedAt)
+	}
+	if age < 0 {
+		return 0
+	}
+	return age
+}
+
+func (entry cacheEntry) isFresh(now time.Time) bool {
+	return entry.currentAge(now) < entry.freshnessLifetime
+}
+
 // maxCacheableBodyBytes returns how much response body can be stored after
 // accounting for the cache key and response headers.
 func (c *memoryCache) maxCacheableBodyBytes(
@@ -147,7 +171,7 @@ func (c *memoryCache) removeExpiredLocked(now time.Time) {
 	for element := c.lru.Back(); element != nil; {
 		previous := element.Prev()
 		item := element.Value.(*cacheItem)
-		if !now.Before(item.entry.expiresAt) {
+		if !item.entry.isFresh(now) {
 			c.removeElementLocked(element)
 		}
 		element = previous

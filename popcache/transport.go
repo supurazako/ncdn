@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -98,6 +99,7 @@ func (t *cachingTransport) fetchFromOrigin(
 		return nil, err
 	}
 	setCacheStatus(resp, "MISS")
+	responseReceivedAt := time.Now()
 
 	if !isCacheableResponse(resp) {
 		return resp, nil
@@ -106,8 +108,11 @@ func (t *cachingTransport) fetchFromOrigin(
 	header := resp.Header.Clone()
 	header.Del(cacheStatusHeader)
 	entry := cacheEntry{
-		statusCode: resp.StatusCode,
-		header:     header,
+		statusCode:           resp.StatusCode,
+		header:               header,
+		freshnessLifetime:    freshnessLifetime(resp, t.ttl, responseReceivedAt),
+		freshnessLifetimeSet: true,
+		initialAge:           responseInitialAge(resp, responseReceivedAt),
 	}
 	maxBodyBytes := t.cache.maxCacheableBodyBytes(key, entry)
 	if maxBodyBytes < 0 ||
@@ -159,6 +164,7 @@ func isCacheableResponse(resp *http.Response) bool {
 
 func responseFromCache(req *http.Request, entry cacheEntry) *http.Response {
 	entry.header.Set(cacheStatusHeader, "HIT")
+	entry.header.Set("Age", strconv.FormatInt(int64(entry.currentAge(time.Now())/time.Second), 10))
 
 	return &http.Response{
 		StatusCode:    entry.statusCode,
@@ -168,6 +174,64 @@ func responseFromCache(req *http.Request, entry cacheEntry) *http.Response {
 		ContentLength: int64(len(entry.body)),
 		Request:       req,
 	}
+}
+
+// freshnessLifetime follows RFC 9111's shared-cache precedence: s-maxage,
+// max-age, Expires minus Date, then the configured fallback TTL.
+func freshnessLifetime(resp *http.Response, fallback time.Duration, receivedAt time.Time) time.Duration {
+	directives := cacheControlDirectives(resp.Header.Values("Cache-Control"))
+	if value, ok := directives["s-maxage"]; ok {
+		return value
+	}
+	if value, ok := directives["max-age"]; ok {
+		return value
+	}
+	if expires, err := http.ParseTime(resp.Header.Get("Expires")); err == nil {
+		base := receivedAt
+		if date, err := http.ParseTime(resp.Header.Get("Date")); err == nil {
+			base = date
+		}
+		return expires.Sub(base)
+	}
+	return fallback
+}
+
+func responseInitialAge(resp *http.Response, receivedAt time.Time) time.Duration {
+	var age time.Duration
+	if seconds, err := strconv.ParseInt(strings.TrimSpace(resp.Header.Get("Age")), 10, 64); err == nil && seconds > 0 {
+		age = time.Duration(seconds) * time.Second
+	}
+	if date, err := http.ParseTime(resp.Header.Get("Date")); err == nil {
+		if apparentAge := receivedAt.Sub(date); apparentAge > age {
+			age = apparentAge
+		}
+	}
+	return age
+}
+
+func cacheControlDirectives(values []string) map[string]time.Duration {
+	directives := make(map[string]time.Duration)
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			name, argument, hasArgument := strings.Cut(strings.TrimSpace(part), "=")
+			if !hasArgument {
+				continue
+			}
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name != "s-maxage" && name != "max-age" {
+				continue
+			}
+			seconds, err := strconv.ParseInt(strings.Trim(strings.TrimSpace(argument), "\""), 10, 64)
+			if err != nil || seconds < 0 {
+				directives[name] = 0
+				continue
+			}
+			if _, exists := directives[name]; !exists {
+				directives[name] = time.Duration(seconds) * time.Second
+			}
+		}
+	}
+	return directives
 }
 
 func setCacheStatus(resp *http.Response, status string) {
