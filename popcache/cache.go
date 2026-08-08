@@ -302,9 +302,9 @@ func (entry cacheEntry) sameVariant(other cacheEntry) bool {
 		reflect.DeepEqual(entry.varyValues, other.varyValues)
 }
 
-// Cache hits can share the immutable stored body. Only the header is cloned
-// because the transport adds the cache status header to each response.
+// Cache reads return an entry with immutable header and body data. The
+// transport clones the header when constructing the response because it adds
+// per-response status and Age fields.
 func cloneCacheEntryForRead(entry cacheEntry) cacheEntry {
-	entry.header = entry.header.Clone()
 	return entry
 }
