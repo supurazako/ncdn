@@ -26,6 +26,16 @@ type readerWithCloser struct {
 	io.Closer
 }
 
+type cacheBody struct {
+	bytes.Reader
+}
+
+func (cacheBody) Close() error { return nil }
+
+func newCacheBody(body []byte) io.ReadCloser {
+	return &cacheBody{Reader: *bytes.NewReader(body)}
+}
+
 func newCachingTransport(
 	base http.RoundTripper,
 	cache *memoryCache,
@@ -296,7 +306,7 @@ func responseFromCacheAt(req *http.Request, entry cacheEntry, status string, now
 		StatusCode:    entry.statusCode,
 		Status:        statusText,
 		Header:        header,
-		Body:          io.NopCloser(bytes.NewReader(entry.body)),
+		Body:          newCacheBody(entry.body),
 		ContentLength: int64(len(entry.body)),
 		Request:       req,
 	}
