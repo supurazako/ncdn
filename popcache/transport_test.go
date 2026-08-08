@@ -60,6 +60,95 @@ func TestCachingTransportReturnsCachedResponse(t *testing.T) {
 	}
 }
 
+func TestFreshnessLifetimeUsesSharedCachePrecedence(t *testing.T) {
+	receivedAt := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		header http.Header
+		want   time.Duration
+	}{
+		{
+			name:   "s-maxage overrides max-age",
+			header: http.Header{"Cache-Control": {"max-age=60, s-maxage=600"}},
+			want:   10 * time.Minute,
+		},
+		{
+			name:   "max-age",
+			header: http.Header{"Cache-Control": {"max-age=60"}},
+			want:   time.Minute,
+		},
+		{
+			name: "Expires minus Date",
+			header: http.Header{
+				"Date":    {receivedAt.Format(http.TimeFormat)},
+				"Expires": {receivedAt.Add(2 * time.Minute).Format(http.TimeFormat)},
+			},
+			want: 2 * time.Minute,
+		},
+		{
+			name:   "fallback",
+			header: make(http.Header),
+			want:   30 * time.Second,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resp := &http.Response{Header: test.header}
+			if got := freshnessLifetime(resp, 30*time.Second, receivedAt); got != test.want {
+				t.Fatalf("freshness lifetime: got %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestResponseFromCacheSetsAge(t *testing.T) {
+	now := time.Now()
+	entry := cacheEntry{
+		statusCode:           http.StatusOK,
+		header:               make(http.Header),
+		body:                 []byte("cached"),
+		storedAt:             now.Add(-42 * time.Second),
+		initialAge:           3 * time.Second,
+		freshnessLifetime:    time.Minute,
+		freshnessLifetimeSet: true,
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://origin.example/object", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := responseFromCache(req, entry)
+	if got := resp.Header.Get("Age"); got != "45" && got != "46" {
+		t.Fatalf("Age: got %q, want approximately 45 seconds", got)
+	}
+}
+
+func TestCachingTransportExpiresAccordingToMaxAge(t *testing.T) {
+	var originRequests int
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		originRequests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Cache-Control": {"max-age=0"}},
+			Body:       io.NopCloser(strings.NewReader("from origin")),
+			Request:    req,
+		}, nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+
+	performRequest(t, transport, http.MethodGet)
+	performRequest(t, transport, http.MethodGet)
+
+	if originRequests != 2 {
+		t.Fatalf("origin requests: got %d, want 2", originRequests)
+	}
+}
+
 func TestCachingTransportDoesNotCachePost(t *testing.T) {
 	originRequests := 0
 	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
