@@ -124,6 +124,41 @@ func TestResponseFromCacheSetsAge(t *testing.T) {
 	}
 }
 
+func TestCacheEntryStaleWindowEnds(t *testing.T) {
+	storedAt := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	entry := cacheEntry{
+		storedAt:             storedAt,
+		freshnessLifetime:    time.Minute,
+		freshnessLifetimeSet: true,
+	}
+
+	if entry.servesStaleWithin(storedAt.Add(30*time.Second), 10*time.Second) {
+		t.Fatal("fresh entry must not be treated as stale")
+	}
+	if !entry.servesStaleWithin(storedAt.Add(65*time.Second), 10*time.Second) {
+		t.Fatal("entry inside stale window was not accepted")
+	}
+	if entry.servesStaleWithin(storedAt.Add(71*time.Second), 10*time.Second) {
+		t.Fatal("entry outside stale window was accepted")
+	}
+}
+
+func TestStaleControlHonorsRevalidationDirectives(t *testing.T) {
+	for _, directive := range []string{"must-revalidate", "proxy-revalidate", "no-cache"} {
+		t.Run(directive, func(t *testing.T) {
+			resp := &http.Response{Header: http.Header{
+				"Cache-Control": {"max-age=0, stale-while-revalidate=60, stale-if-error=60, " + directive},
+			}}
+			if got := staleControl(resp, "stale-while-revalidate"); got != 0 {
+				t.Fatalf("stale-while-revalidate: got %s, want 0", got)
+			}
+			if got := staleControl(resp, "stale-if-error"); got != 0 {
+				t.Fatalf("stale-if-error: got %s, want 0", got)
+			}
+		})
+	}
+}
+
 func TestCachingTransportExpiresAccordingToMaxAge(t *testing.T) {
 	var originRequests int
 	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
