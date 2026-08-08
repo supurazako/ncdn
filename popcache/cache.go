@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -19,6 +20,8 @@ type cacheEntry struct {
 	// fallback supplied to set.
 	freshnessLifetime    time.Duration
 	freshnessLifetimeSet bool
+	vary                 []string
+	varyValues           http.Header
 }
 
 type cacheItem struct {
@@ -36,7 +39,7 @@ type cacheStats struct {
 
 type memoryCache struct {
 	mu             sync.Mutex
-	entries        map[string]*list.Element
+	entries        map[string][]*list.Element
 	lru            *list.List
 	usedBytes      int64
 	maxBytes       int64
@@ -62,7 +65,7 @@ func newMemoryCache(maxBytes, maxObjectBytes int64) (*memoryCache, error) {
 	}
 
 	return &memoryCache{
-		entries:        make(map[string]*list.Element),
+		entries:        make(map[string][]*list.Element),
 		lru:            list.New(),
 		maxBytes:       maxBytes,
 		maxObjectBytes: maxObjectBytes,
@@ -73,19 +76,20 @@ func (c *memoryCache) get(key string) (cacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	element, ok := c.entries[key]
-	if !ok {
+	elements := c.entries[key]
+	if len(elements) == 0 {
 		return cacheEntry{}, false
 	}
-
-	item := element.Value.(*cacheItem)
-	if !item.entry.isFresh(time.Now()) {
-		c.removeElementLocked(element)
-		return cacheEntry{}, false
+	for _, element := range append([]*list.Element(nil), elements...) {
+		item := element.Value.(*cacheItem)
+		if !item.entry.isFresh(time.Now()) {
+			c.removeElementLocked(element)
+			continue
+		}
+		c.lru.MoveToFront(element)
+		return cloneCacheEntryForRead(item.entry), true
 	}
-
-	c.lru.MoveToFront(element)
-	return cloneCacheEntryForRead(item.entry), true
+	return cacheEntry{}, false
 }
 
 // getFresh returns only a fresh entry and leaves stale entries available for
@@ -94,16 +98,28 @@ func (c *memoryCache) getFresh(key string) (cacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	element, ok := c.entries[key]
-	if !ok {
-		return cacheEntry{}, false
+	for _, element := range c.entries[key] {
+		item := element.Value.(*cacheItem)
+		if item.entry.isFresh(time.Now()) {
+			c.lru.MoveToFront(element)
+			return cloneCacheEntryForRead(item.entry), true
+		}
 	}
-	item := element.Value.(*cacheItem)
-	if !item.entry.isFresh(time.Now()) {
-		return cacheEntry{}, false
+	return cacheEntry{}, false
+}
+
+func (c *memoryCache) getFreshVariant(key string, req *http.Request) (cacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, element := range c.entries[key] {
+		item := element.Value.(*cacheItem)
+		if item.entry.isFresh(time.Now()) && item.entry.matchesRequest(req) {
+			c.lru.MoveToFront(element)
+			return cloneCacheEntryForRead(item.entry), true
+		}
 	}
-	c.lru.MoveToFront(element)
-	return cloneCacheEntryForRead(item.entry), true
+	return cacheEntry{}, false
 }
 
 // peek returns an entry even when it is stale. A stale entry can still carry
@@ -112,11 +128,23 @@ func (c *memoryCache) peek(key string) (cacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	element, ok := c.entries[key]
-	if !ok {
-		return cacheEntry{}, false
+	for _, element := range c.entries[key] {
+		return cloneCacheEntryForRead(element.Value.(*cacheItem).entry), true
 	}
-	return cloneCacheEntryForRead(element.Value.(*cacheItem).entry), true
+	return cacheEntry{}, false
+}
+
+func (c *memoryCache) peekVariant(key string, req *http.Request) (cacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, element := range c.entries[key] {
+		item := element.Value.(*cacheItem)
+		if item.entry.matchesRequest(req) {
+			return cloneCacheEntryForRead(item.entry), true
+		}
+	}
+	return cacheEntry{}, false
 }
 
 func (c *memoryCache) set(
@@ -138,8 +166,10 @@ func (c *memoryCache) set(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if existing, ok := c.entries[key]; ok {
-		c.removeElementLocked(existing)
+	for _, existing := range append([]*list.Element(nil), c.entries[key]...) {
+		if existing.Value.(*cacheItem).entry.sameVariant(entry) {
+			c.removeElementLocked(existing)
+		}
 	}
 
 	for c.usedBytes+sizeBytes > c.maxBytes {
@@ -156,7 +186,7 @@ func (c *memoryCache) set(
 		sizeBytes: sizeBytes,
 	}
 	element := c.lru.PushFront(item)
-	c.entries[key] = element
+	c.entries[key] = append(c.entries[key], element)
 	c.usedBytes += sizeBytes
 	return true
 }
@@ -190,8 +220,12 @@ func (c *memoryCache) stats() cacheStats {
 	defer c.mu.Unlock()
 
 	c.removeExpiredLocked(time.Now())
+	entries := 0
+	for _, elements := range c.entries {
+		entries += len(elements)
+	}
 	return cacheStats{
-		Entries:        len(c.entries),
+		Entries:        entries,
 		UsedBytes:      c.usedBytes,
 		MaxBytes:       c.maxBytes,
 		MaxObjectBytes: c.maxObjectBytes,
@@ -211,7 +245,18 @@ func (c *memoryCache) removeExpiredLocked(now time.Time) {
 
 func (c *memoryCache) removeElementLocked(element *list.Element) {
 	item := element.Value.(*cacheItem)
-	delete(c.entries, item.key)
+	elements := c.entries[item.key]
+	for index, candidate := range elements {
+		if candidate == element {
+			elements = append(elements[:index], elements[index+1:]...)
+			break
+		}
+	}
+	if len(elements) == 0 {
+		delete(c.entries, item.key)
+	} else {
+		c.entries[item.key] = elements
+	}
 	c.lru.Remove(element)
 	c.usedBytes -= item.sizeBytes
 }
@@ -232,7 +277,23 @@ func cacheEntrySize(key string, entry cacheEntry) int64 {
 func cloneCacheEntry(entry cacheEntry) cacheEntry {
 	entry.header = entry.header.Clone()
 	entry.body = append([]byte(nil), entry.body...)
+	entry.vary = append([]string(nil), entry.vary...)
+	entry.varyValues = entry.varyValues.Clone()
 	return entry
+}
+
+func (entry cacheEntry) matchesRequest(req *http.Request) bool {
+	for _, name := range entry.vary {
+		if !reflect.DeepEqual(entry.varyValues.Values(name), req.Header.Values(name)) {
+			return false
+		}
+	}
+	return true
+}
+
+func (entry cacheEntry) sameVariant(other cacheEntry) bool {
+	return reflect.DeepEqual(entry.vary, other.vary) &&
+		reflect.DeepEqual(entry.varyValues, other.varyValues)
 }
 
 // Cache hits can share the immutable stored body. Only the header is cloned
