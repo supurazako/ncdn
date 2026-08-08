@@ -20,7 +20,9 @@ HTTP 200 responseであっても、`Cache-Control: no-store`、`Cache-Control: p
 
 HTTP 200以外や容量上限を超えるresponseはcacheに保存できないため、待機していたrequestもそれぞれOriginから取得する。また、この集約はnode単位であり、C0とC1の間では共有しない。
 
-freshnessを過ぎたresponseは、`ETag`または`Last-Modified`があれば条件付きrequestでOriginへ再検証する。`304 Not Modified`の場合は保存済みの本文を再利用し、metadataとfreshnessを更新する。validatorがない場合はOriginから本文を取り直す。`stale-while-revalidate`は今後の対応とする。
+freshnessを過ぎたresponseは、`ETag`または`Last-Modified`があれば条件付きrequestでOriginへ再検証する。`304 Not Modified`の場合は保存済みの本文を再利用し、metadataとfreshnessを更新する。validatorがない場合はOriginから本文を取り直す。
+
+`Cache-Control: stale-while-revalidate`が指定されている場合は、freshnessを過ぎたresponseを指定時間内ならすぐ返し、裏でOriginを再検証する。`stale-if-error`が指定されている場合は、Originへの接続失敗または5xx responseのときに、指定時間内の古いresponseを返す。`must-revalidate`、`proxy-revalidate`、`no-cache`が指定されたresponseでは、これらのstale制御を行わない。
 
 レスポンスに`Vary`がある場合は、指定されたrequest headerの値ごとにcache variantを分離する。`Vary: *`のレスポンスは保存しない。
 

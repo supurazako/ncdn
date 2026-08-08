@@ -22,6 +22,8 @@ type cacheEntry struct {
 	freshnessLifetimeSet bool
 	vary                 []string
 	varyValues           http.Header
+	staleWhileRevalidate time.Duration
+	staleIfError         time.Duration
 }
 
 type cacheItem struct {
@@ -204,6 +206,10 @@ func (entry cacheEntry) currentAge(now time.Time) time.Duration {
 
 func (entry cacheEntry) isFresh(now time.Time) bool {
 	return entry.currentAge(now) < entry.freshnessLifetime
+}
+
+func (entry cacheEntry) servesStaleWithin(now time.Time, window time.Duration) bool {
+	return !entry.isFresh(now) && entry.currentAge(now) < entry.freshnessLifetime+window
 }
 
 // maxCacheableBodyBytes returns how much response body can be stored after

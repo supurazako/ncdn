@@ -149,6 +149,100 @@ func TestCachingTransportExpiresAccordingToMaxAge(t *testing.T) {
 	}
 }
 
+func TestCachingTransportServesStaleWhileRevalidating(t *testing.T) {
+	var originRequests atomic.Int32
+	releaseRefresh := make(chan struct{})
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requestNumber := originRequests.Add(1)
+		if requestNumber == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": {"max-age=0, stale-while-revalidate=60"},
+					"Etag":          {`"v1"`},
+				},
+				Body:    io.NopCloser(strings.NewReader("cached body")),
+				Request: req,
+			}, nil
+		}
+		if got := req.Header.Get("If-None-Match"); got != `"v1"` {
+			t.Errorf("If-None-Match: got %q, want %q", got, `"v1"`)
+		}
+		<-releaseRefresh
+		return &http.Response{
+			StatusCode: http.StatusNotModified,
+			Header:     http.Header{"Cache-Control": {"max-age=60"}},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    req,
+		}, nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+
+	performRequest(t, transport, http.MethodGet)
+	stale := performRequest(t, transport, http.MethodGet)
+	if stale.body != "cached body" || stale.cacheStatus != "STALE" {
+		t.Fatalf("stale response: %+v", stale)
+	}
+	deadline := time.After(time.Second)
+	for originRequests.Load() != 2 {
+		select {
+		case <-deadline:
+			t.Fatal("background refresh did not start")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	close(releaseRefresh)
+	deadline = time.After(time.Second)
+	for {
+		if got := originRequests.Load(); got == 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("background refresh did not finish")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	refreshed := performRequest(t, transport, http.MethodGet)
+	if refreshed.cacheStatus != "HIT" || refreshed.body != "cached body" {
+		t.Fatalf("refreshed response: %+v", refreshed)
+	}
+}
+
+func TestCachingTransportServesStaleIfOriginFails(t *testing.T) {
+	var originRequests atomic.Int32
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if originRequests.Add(1) == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Cache-Control": {"max-age=0, stale-if-error=60"}},
+				Body:       io.NopCloser(strings.NewReader("cached body")),
+				Request:    req,
+			}, nil
+		}
+		return nil, errors.New("origin unavailable")
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+
+	performRequest(t, transport, http.MethodGet)
+	stale := performRequest(t, transport, http.MethodGet)
+	if stale.body != "cached body" || stale.cacheStatus != "STALE-IF-ERROR" {
+		t.Fatalf("stale-if-error response: %+v", stale)
+	}
+	if got := originRequests.Load(); got != 2 {
+		t.Fatalf("origin requests: got %d, want 2", got)
+	}
+}
+
 func TestCachingTransportRevalidatesWithETag(t *testing.T) {
 	var originRequests int
 	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {

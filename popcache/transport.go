@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,8 +79,11 @@ func (t *cachingTransport) fillCache(
 	key string,
 	flight *missFlight,
 ) (resp *http.Response, err error) {
+	backgroundRefresh := false
 	defer func() {
-		t.misses.finish(key, flight, err)
+		if !backgroundRefresh {
+			t.misses.finish(key, flight, err)
+		}
 	}()
 
 	// The cache may have been filled between the first lookup and acquire.
@@ -91,7 +95,22 @@ func (t *cachingTransport) fillCache(
 	if entry, ok := t.cache.peekVariant(key, req); ok {
 		stale = &entry
 	}
-	return t.fetchFromOrigin(req, key, stale)
+	if stale != nil && stale.servesStaleWithin(time.Now(), stale.staleWhileRevalidate) {
+		backgroundRefresh = true
+		refreshReq := req.Clone(context.Background())
+		staleEntry := *stale
+		go func() {
+			_, refreshErr := t.fetchFromOrigin(refreshReq, key, &staleEntry)
+			t.misses.finish(key, flight, refreshErr)
+		}()
+		return responseFromCacheWithStatus(req, *stale, "STALE"), nil
+	}
+	resp, err = t.fetchFromOrigin(req, key, stale)
+	if stale != nil && stale.servesStaleWithin(time.Now(), stale.staleIfError) &&
+		(err != nil || resp.StatusCode >= 500) {
+		return responseFromCacheWithStatus(req, *stale, "STALE-IF-ERROR"), nil
+	}
+	return resp, err
 }
 
 func (t *cachingTransport) fetchFromOrigin(
@@ -137,6 +156,8 @@ func (t *cachingTransport) fetchFromOrigin(
 		initialAge:           responseInitialAge(resp, responseReceivedAt),
 		vary:                 vary,
 		varyValues:           requestVaryValues(req, vary),
+		staleWhileRevalidate: staleControl(resp, "stale-while-revalidate"),
+		staleIfError:         staleControl(resp, "stale-if-error"),
 	}
 	maxBodyBytes := t.cache.maxCacheableBodyBytes(key, entry)
 	if maxBodyBytes < 0 ||
@@ -183,6 +204,8 @@ func (t *cachingTransport) revalidatedResponse(
 	updated.initialAge = responseInitialAge(validation, now)
 	updated.freshnessLifetime = freshnessLifetime(validation, stale.freshnessLifetime, now)
 	updated.freshnessLifetimeSet = true
+	updated.staleWhileRevalidate = staleControl(&http.Response{Header: updated.header}, "stale-while-revalidate")
+	updated.staleIfError = staleControl(&http.Response{Header: updated.header}, "stale-if-error")
 	t.cache.set(key, updated, t.ttl)
 
 	result := responseFromCache(req, updated)
@@ -245,17 +268,32 @@ func requestVaryValues(req *http.Request, fields []string) http.Header {
 }
 
 func responseFromCache(req *http.Request, entry cacheEntry) *http.Response {
-	entry.header.Set(cacheStatusHeader, "HIT")
-	entry.header.Set("Age", strconv.FormatInt(int64(entry.currentAge(time.Now())/time.Second), 10))
+	return responseFromCacheWithStatus(req, entry, "HIT")
+}
+
+func responseFromCacheWithStatus(req *http.Request, entry cacheEntry, status string) *http.Response {
+	header := entry.header.Clone()
+	header.Set(cacheStatusHeader, status)
+	header.Set("Age", strconv.FormatInt(int64(entry.currentAge(time.Now())/time.Second), 10))
 
 	return &http.Response{
 		StatusCode:    entry.statusCode,
 		Status:        formatHTTPStatus(entry.statusCode),
-		Header:        entry.header,
+		Header:        header,
 		Body:          io.NopCloser(bytes.NewReader(entry.body)),
 		ContentLength: int64(len(entry.body)),
 		Request:       req,
 	}
+}
+
+func staleControl(resp *http.Response, name string) time.Duration {
+	if hasCacheDirective(resp, "must-revalidate") ||
+		hasCacheDirective(resp, "proxy-revalidate") ||
+		hasCacheDirective(resp, "no-cache") {
+		return 0
+	}
+	directives := cacheControlDirectives(resp.Header.Values("Cache-Control"))
+	return directives[name]
 }
 
 // freshnessLifetime follows RFC 9111's shared-cache precedence: s-maxage,
@@ -300,7 +338,8 @@ func cacheControlDirectives(values []string) map[string]time.Duration {
 				continue
 			}
 			name = strings.ToLower(strings.TrimSpace(name))
-			if name != "s-maxage" && name != "max-age" {
+			if name != "s-maxage" && name != "max-age" &&
+				name != "stale-while-revalidate" && name != "stale-if-error" {
 				continue
 			}
 			seconds, err := strconv.ParseInt(strings.Trim(strings.TrimSpace(argument), "\""), 10, 64)
@@ -314,6 +353,18 @@ func cacheControlDirectives(values []string) map[string]time.Duration {
 		}
 	}
 	return directives
+}
+
+func hasCacheDirective(resp *http.Response, wanted string) bool {
+	for _, value := range resp.Header.Values("Cache-Control") {
+		for _, part := range strings.Split(value, ",") {
+			name, _, _ := strings.Cut(strings.TrimSpace(part), "=")
+			if strings.EqualFold(strings.TrimSpace(name), wanted) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func setCacheStatus(resp *http.Response, status string) {
