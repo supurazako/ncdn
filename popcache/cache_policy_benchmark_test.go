@@ -53,7 +53,8 @@ func TestCachePolicyHitRateAcrossTraces(t *testing.T) {
 			trace := newZipfTrace(test.exponent, requests, keys, test.capacity, test.seed)
 			lruHits := simulateLRU(trace.keys, trace.capacity)
 			clockHits := simulateClock(trace.keys, trace.capacity)
-			t.Logf("LRU hit ratio: %.4f, CLOCK hit ratio: %.4f, difference: %.4f", float64(lruHits)/requests, float64(clockHits)/requests, float64(clockHits-lruHits)/requests)
+			tinyLFUHits := simulateTinyLFU(trace.keys, trace.capacity)
+			t.Logf("LRU: %.4f, CLOCK: %.4f, TinyLFU: %.4f", float64(lruHits)/requests, float64(clockHits)/requests, float64(tinyLFUHits)/requests)
 		})
 	}
 }
@@ -66,6 +67,7 @@ func BenchmarkCachePolicyTrace(b *testing.B) {
 	}{
 		{name: "LRU", run: simulateLRU},
 		{name: "CLOCK", run: simulateClock},
+		{name: "TinyLFU", run: simulateTinyLFU},
 	} {
 		b.Run(policy.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -130,6 +132,41 @@ func simulateClock(trace []int, capacity int) int {
 		entries[hand] = clockPolicyEntry{key: key, occupied: true, refer: true}
 		cache[key] = hand
 		hand = (hand + 1) % capacity
+	}
+	return hits
+}
+
+// simulateTinyLFU is a small TinyLFU-like admission simulation. It uses an
+// exact frequency map for clarity in the experiment; a production
+// implementation would use a bounded approximate counter such as a Count-Min
+// Sketch. Frequencies are periodically decayed so old popularity does not
+// dominate the admission decision forever.
+func simulateTinyLFU(trace []int, capacity int) int {
+	cache := make(map[int]*list.Element, capacity)
+	frequencies := make(map[int]uint32)
+	entries := list.New()
+	hits := 0
+	for index, key := range trace {
+		frequencies[key]++
+		if element, ok := cache[key]; ok {
+			hits++
+			entries.MoveToFront(element)
+		} else if entries.Len() < capacity {
+			cache[key] = entries.PushFront(lruPolicyEntry{key: key})
+		} else {
+			victim := entries.Back()
+			victimKey := victim.Value.(lruPolicyEntry).key
+			if frequencies[key] > frequencies[victimKey] {
+				delete(cache, victimKey)
+				entries.Remove(victim)
+				cache[key] = entries.PushFront(lruPolicyEntry{key: key})
+			}
+		}
+		if (index+1)%10_000 == 0 {
+			for key, frequency := range frequencies {
+				frequencies[key] = (frequency + 1) / 2
+			}
+		}
 	}
 	return hits
 }
