@@ -47,8 +47,9 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 
 	key := req.URL.String()
-	if entry, ok := t.cache.getFreshVariant(key, req); ok {
-		return responseFromCache(req, entry), nil
+	now := time.Now()
+	if entry, ok := t.cache.getFreshVariantAt(key, req, now); ok {
+		return responseFromCacheAt(req, entry, "HIT", now), nil
 	}
 
 	flight, leader := t.misses.acquire(key)
@@ -62,8 +63,9 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			return nil, req.Context().Err()
 		}
 
-		if entry, ok := t.cache.getFreshVariant(key, req); ok {
-			return responseFromCache(req, entry), nil
+		now := time.Now()
+		if entry, ok := t.cache.getFreshVariantAt(key, req, now); ok {
+			return responseFromCacheAt(req, entry, "HIT", now), nil
 		}
 
 		// The completed response was not cacheable. Fetch a response for this
@@ -87,8 +89,9 @@ func (t *cachingTransport) fillCache(
 	}()
 
 	// The cache may have been filled between the first lookup and acquire.
-	if entry, ok := t.cache.getFreshVariant(key, req); ok {
-		return responseFromCache(req, entry), nil
+	now := time.Now()
+	if entry, ok := t.cache.getFreshVariantAt(key, req, now); ok {
+		return responseFromCacheAt(req, entry, "HIT", now), nil
 	}
 
 	var stale *cacheEntry
@@ -268,13 +271,17 @@ func requestVaryValues(req *http.Request, fields []string) http.Header {
 }
 
 func responseFromCache(req *http.Request, entry cacheEntry) *http.Response {
-	return responseFromCacheWithStatus(req, entry, "HIT")
+	return responseFromCacheAt(req, entry, "HIT", time.Now())
 }
 
 func responseFromCacheWithStatus(req *http.Request, entry cacheEntry, status string) *http.Response {
+	return responseFromCacheAt(req, entry, status, time.Now())
+}
+
+func responseFromCacheAt(req *http.Request, entry cacheEntry, status string, now time.Time) *http.Response {
 	header := entry.header.Clone()
 	header.Set(cacheStatusHeader, status)
-	header.Set("Age", strconv.FormatInt(int64(entry.currentAge(time.Now())/time.Second), 10))
+	header.Set("Age", strconv.FormatInt(int64(entry.currentAge(now)/time.Second), 10))
 
 	return &http.Response{
 		StatusCode:    entry.statusCode,

@@ -111,12 +111,16 @@ func (c *memoryCache) getFresh(key string) (cacheEntry, bool) {
 }
 
 func (c *memoryCache) getFreshVariant(key string, req *http.Request) (cacheEntry, bool) {
+	return c.getFreshVariantAt(key, req, time.Now())
+}
+
+func (c *memoryCache) getFreshVariantAt(key string, req *http.Request, now time.Time) (cacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for _, element := range c.entries[key] {
 		item := element.Value.(*cacheItem)
-		if item.entry.isFresh(time.Now()) && item.entry.matchesRequest(req) {
+		if item.entry.isFresh(now) && item.entry.matchesRequest(req) {
 			c.lru.MoveToFront(element)
 			return cloneCacheEntryForRead(item.entry), true
 		}
