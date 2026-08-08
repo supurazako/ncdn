@@ -28,4 +28,17 @@ freshnessを過ぎたresponseは、`ETag`または`Last-Modified`があれば条
 
 現在の使用量と設定値は`/statusz`の`cache`で確認できる。
 
+実HTTP経路のキャッシュHIT性能は、popcacheを起動した状態で`benchmark-http.sh`から測定できる。`ab`（ApacheBench）と`curl`が必要で、既定では`http://127.0.0.1:8889/json`へ20,000リクエスト、同時接続数100を3回実行する。
+
+```sh
+./popcache/benchmark-http.sh
+```
+
+測定条件は環境変数で変更できる。各回のレイテンシ分布は`OUTPUT_DIR`（既定値`/tmp/ncdn-http-benchmark`）にCSVで保存する。
+
+```sh
+URL=http://127.0.0.1:8889/json REQUESTS=50000 CONCURRENCY=200 RUNS=5 \
+  OUTPUT_DIR=/tmp/ncdn-benchmark ./popcache/benchmark-http.sh
+```
+
 HTTP/3は実験的に有効化できる。`-http3ListenAddr`、`-http3CertFile`、`-http3KeyFile`を指定すると、HTTP/1.1と同じhandlerをQUIC上でも公開する。HTTP/3の入口は現在のL4LBとは独立しており、UDP/443の転送や実機でのQUIC疎通は別途確認が必要である。
