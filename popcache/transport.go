@@ -47,11 +47,11 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		return t.base.RoundTrip(req)
 	}
 
-	key := req.URL.String()
 	now := time.Now()
-	if entry, ok := t.cache.getFreshVariantAt(key, req, now); ok {
+	if entry, ok := t.cache.getFreshRequestVariant(req, now); ok {
 		return responseFromCacheAt(req, entry, "HIT", now), nil
 	}
+	key := req.URL.String()
 
 	flight, leader := t.misses.acquire(key)
 	if !leader {
@@ -155,6 +155,7 @@ func (t *cachingTransport) fetchFromOrigin(
 	entry := cacheEntry{
 		statusCode:           resp.StatusCode,
 		status:               formatHTTPStatus(resp.StatusCode),
+		fastKey:              newRequestCacheKey(req),
 		header:               header,
 		freshnessLifetime:    freshnessLifetime(resp, t.ttl, responseReceivedAt),
 		freshnessLifetimeSet: true,
