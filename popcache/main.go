@@ -15,6 +15,9 @@ import (
 
 var originURLStr = flag.String("originURL", "http://localhost:8888", "Origin server URL")
 var listenAddr = flag.String("listenAddr", ":8889", "Address to listen on")
+var http3ListenAddr = flag.String("http3ListenAddr", "", "Address to listen for HTTP/3; empty disables HTTP/3")
+var http3CertFile = flag.String("http3CertFile", "", "TLS certificate for HTTP/3")
+var http3KeyFile = flag.String("http3KeyFile", "", "TLS private key for HTTP/3")
 var nodeId = flag.String("nodeId", "unknown_node", "Name of the node")
 var cacheTTL = flag.Duration("cacheTTL", 30*time.Second, "Cache entry TTL")
 var cacheMaxBytes = flag.Int64("cacheMaxBytes", 64<<20, "Maximum cache size in bytes")
@@ -74,6 +77,12 @@ func main() {
 			r.SetURL(originURL)
 		},
 	})
+	if *http3ListenAddr != "" {
+		if *http3CertFile == "" || *http3KeyFile == "" {
+			log.Fatal("-http3CertFile and -http3KeyFile are required when HTTP/3 is enabled")
+		}
+		go serveHTTP3(*http3ListenAddr, *http3CertFile, *http3KeyFile, mux)
+	}
 
 	log.Printf("Listening on %s...", *listenAddr)
 	if err := http.ListenAndServe(*listenAddr, nil); err != nil {
