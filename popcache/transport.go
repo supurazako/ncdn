@@ -46,7 +46,7 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 
 	key := req.URL.String()
-	if entry, ok := t.cache.get(key); ok {
+	if entry, ok := t.cache.getFresh(key); ok {
 		return responseFromCache(req, entry), nil
 	}
 
@@ -67,7 +67,7 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 		// The completed response was not cacheable. Fetch a response for this
 		// request without starting another round of waiting.
-		return t.fetchFromOrigin(req, key)
+		return t.fetchFromOrigin(req, key, nil)
 	}
 
 	return t.fillCache(req, key, flight)
@@ -83,20 +83,38 @@ func (t *cachingTransport) fillCache(
 	}()
 
 	// The cache may have been filled between the first lookup and acquire.
-	if entry, ok := t.cache.get(key); ok {
+	if entry, ok := t.cache.getFresh(key); ok {
 		return responseFromCache(req, entry), nil
 	}
 
-	return t.fetchFromOrigin(req, key)
+	var stale *cacheEntry
+	if entry, ok := t.cache.peek(key); ok {
+		stale = &entry
+	}
+	return t.fetchFromOrigin(req, key, stale)
 }
 
 func (t *cachingTransport) fetchFromOrigin(
 	req *http.Request,
 	key string,
+	stale *cacheEntry,
 ) (*http.Response, error) {
-	resp, err := t.base.RoundTrip(req)
+	originReq := req
+	if stale != nil {
+		originReq = req.Clone(req.Context())
+		if etag := stale.header.Get("ETag"); etag != "" {
+			originReq.Header.Set("If-None-Match", etag)
+		} else if lastModified := stale.header.Get("Last-Modified"); lastModified != "" {
+			originReq.Header.Set("If-Modified-Since", lastModified)
+		}
+	}
+
+	resp, err := t.base.RoundTrip(originReq)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode == http.StatusNotModified && stale != nil {
+		return t.revalidatedResponse(req, key, *stale, resp), nil
 	}
 	setCacheStatus(resp, "MISS")
 	responseReceivedAt := time.Now()
@@ -139,6 +157,31 @@ func (t *cachingTransport) fetchFromOrigin(
 	entry.body = body
 	t.cache.set(key, entry, t.ttl)
 	return resp, nil
+}
+
+func (t *cachingTransport) revalidatedResponse(
+	req *http.Request,
+	key string,
+	stale cacheEntry,
+	validation *http.Response,
+) *http.Response {
+	now := time.Now()
+	updated := cloneCacheEntry(stale)
+	for name, values := range validation.Header {
+		updated.header.Del(name)
+		for _, value := range values {
+			updated.header.Add(name, value)
+		}
+	}
+	updated.header.Del(cacheStatusHeader)
+	updated.initialAge = responseInitialAge(validation, now)
+	updated.freshnessLifetime = freshnessLifetime(validation, stale.freshnessLifetime, now)
+	updated.freshnessLifetimeSet = true
+	t.cache.set(key, updated, t.ttl)
+
+	result := responseFromCache(req, updated)
+	result.Header.Set(cacheStatusHeader, "REVALIDATED")
+	return result
 }
 
 func isCacheableResponse(resp *http.Response) bool {
