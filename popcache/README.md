@@ -20,6 +20,6 @@ HTTP 200 responseであっても、`Cache-Control: no-store`、`Cache-Control: p
 
 HTTP 200以外や容量上限を超えるresponseはcacheに保存できないため、待機していたrequestもそれぞれOriginから取得する。また、この集約はnode単位であり、C0とC1の間では共有しない。
 
-freshnessを過ぎたresponseは、現時点では削除してOriginから取り直す。`ETag` / `Last-Modified`による再検証や`stale-while-revalidate`は今後の対応とする。
+freshnessを過ぎたresponseは、`ETag`または`Last-Modified`があれば条件付きrequestでOriginへ再検証する。`304 Not Modified`の場合は保存済みの本文を再利用し、metadataとfreshnessを更新する。validatorがない場合はOriginから本文を取り直す。`stale-while-revalidate`は今後の対応とする。
 
 現在の使用量と設定値は`/statusz`の`cache`で確認できる。

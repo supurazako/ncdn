@@ -88,6 +88,37 @@ func (c *memoryCache) get(key string) (cacheEntry, bool) {
 	return cloneCacheEntryForRead(item.entry), true
 }
 
+// getFresh returns only a fresh entry and leaves stale entries available for
+// conditional revalidation.
+func (c *memoryCache) getFresh(key string) (cacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	element, ok := c.entries[key]
+	if !ok {
+		return cacheEntry{}, false
+	}
+	item := element.Value.(*cacheItem)
+	if !item.entry.isFresh(time.Now()) {
+		return cacheEntry{}, false
+	}
+	c.lru.MoveToFront(element)
+	return cloneCacheEntryForRead(item.entry), true
+}
+
+// peek returns an entry even when it is stale. A stale entry can still carry
+// validators such as ETag or Last-Modified that are needed for revalidation.
+func (c *memoryCache) peek(key string) (cacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	element, ok := c.entries[key]
+	if !ok {
+		return cacheEntry{}, false
+	}
+	return cloneCacheEntryForRead(element.Value.(*cacheItem).entry), true
+}
+
 func (c *memoryCache) set(
 	key string,
 	entry cacheEntry,

@@ -149,6 +149,89 @@ func TestCachingTransportExpiresAccordingToMaxAge(t *testing.T) {
 	}
 }
 
+func TestCachingTransportRevalidatesWithETag(t *testing.T) {
+	var originRequests int
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		originRequests++
+		if originRequests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": {"max-age=0"},
+					"Etag":          {`"v1"`},
+				},
+				Body:    io.NopCloser(strings.NewReader("cached body")),
+				Request: req,
+			}, nil
+		}
+		if got := req.Header.Get("If-None-Match"); got != `"v1"` {
+			t.Fatalf("If-None-Match: got %q, want %q", got, `"v1"`)
+		}
+		return &http.Response{
+			StatusCode: http.StatusNotModified,
+			Header:     http.Header{"Cache-Control": {"max-age=60"}},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    req,
+		}, nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+
+	first := performRequest(t, transport, http.MethodGet)
+	second := performRequest(t, transport, http.MethodGet)
+
+	if first.body != "cached body" || second.body != "cached body" {
+		t.Fatalf("bodies: first=%q second=%q", first.body, second.body)
+	}
+	if second.cacheStatus != "REVALIDATED" {
+		t.Fatalf("cache status: got %q, want REVALIDATED", second.cacheStatus)
+	}
+	if originRequests != 2 {
+		t.Fatalf("origin requests: got %d, want 2", originRequests)
+	}
+}
+
+func TestCachingTransportRevalidatesWithLastModified(t *testing.T) {
+	var originRequests int
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		originRequests++
+		if originRequests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": {"max-age=0"},
+					"Last-Modified": {"Thu, 01 Jan 2026 00:00:00 GMT"},
+				},
+				Body:    io.NopCloser(strings.NewReader("cached body")),
+				Request: req,
+			}, nil
+		}
+		if got := req.Header.Get("If-Modified-Since"); got != "Thu, 01 Jan 2026 00:00:00 GMT" {
+			t.Fatalf("If-Modified-Since: got %q", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusNotModified,
+			Header:     http.Header{"Cache-Control": {"max-age=60"}},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    req,
+		}, nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+
+	performRequest(t, transport, http.MethodGet)
+	second := performRequest(t, transport, http.MethodGet)
+	if second.body != "cached body" || second.cacheStatus != "REVALIDATED" {
+		t.Fatalf("revalidated response: %+v", second)
+	}
+}
+
 func TestCachingTransportDoesNotCachePost(t *testing.T) {
 	originRequests := 0
 	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
