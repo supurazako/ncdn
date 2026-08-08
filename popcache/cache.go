@@ -43,6 +43,7 @@ type cacheStats struct {
 type memoryCache struct {
 	mu             sync.Mutex
 	entries        map[string][]*list.Element
+	fastEntries    sync.Map // key -> *cacheItem for single, non-Vary variants
 	lru            *list.List
 	usedBytes      int64
 	maxBytes       int64
@@ -116,6 +117,13 @@ func (c *memoryCache) getFreshVariant(key string, req *http.Request) (cacheEntry
 }
 
 func (c *memoryCache) getFreshVariantAt(key string, req *http.Request, now time.Time) (cacheEntry, bool) {
+	if value, ok := c.fastEntries.Load(key); ok {
+		item := value.(*cacheItem)
+		if item.entry.isFresh(now) && item.entry.matchesRequest(req) {
+			return cloneCacheEntryForRead(item.entry), true
+		}
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -194,6 +202,11 @@ func (c *memoryCache) set(
 	}
 	element := c.lru.PushFront(item)
 	c.entries[key] = append(c.entries[key], element)
+	if len(c.entries[key]) == 1 && len(storedEntry.vary) == 0 {
+		c.fastEntries.Store(key, item)
+	} else {
+		c.fastEntries.Delete(key)
+	}
 	c.usedBytes += sizeBytes
 	return true
 }
@@ -256,6 +269,9 @@ func (c *memoryCache) removeExpiredLocked(now time.Time) {
 
 func (c *memoryCache) removeElementLocked(element *list.Element) {
 	item := element.Value.(*cacheItem)
+	if value, ok := c.fastEntries.Load(item.key); ok && value.(*cacheItem) == item {
+		c.fastEntries.Delete(item.key)
+	}
 	elements := c.entries[item.key]
 	for index, candidate := range elements {
 		if candidate == element {
@@ -267,6 +283,10 @@ func (c *memoryCache) removeElementLocked(element *list.Element) {
 		delete(c.entries, item.key)
 	} else {
 		c.entries[item.key] = elements
+		remaining := elements[0].Value.(*cacheItem)
+		if len(elements) == 1 && len(remaining.entry.vary) == 0 {
+			c.fastEntries.Store(item.key, remaining)
+		}
 	}
 	c.lru.Remove(element)
 	c.usedBytes -= item.sizeBytes
