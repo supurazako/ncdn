@@ -232,6 +232,88 @@ func TestCachingTransportRevalidatesWithLastModified(t *testing.T) {
 	}
 }
 
+func TestCachingTransportSeparatesVaryVariants(t *testing.T) {
+	var originRequests int
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		originRequests++
+		language := req.Header.Get("Accept-Language")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Cache-Control": {"max-age=60"},
+				"Vary":          {"Accept-Language"},
+			},
+			Body:    io.NopCloser(strings.NewReader(language)),
+			Request: req,
+		}, nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 4096, 512),
+		time.Minute,
+	)
+
+	request := func(language string) requestResult {
+		req, err := http.NewRequest(http.MethodGet, "http://origin.example/object", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept-Language", language)
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return requestResult{
+			response: observedResponse{
+				body:        string(body),
+				cacheStatus: resp.Header.Get(cacheStatusHeader),
+			},
+		}
+	}
+
+	ja := request("ja")
+	en := request("en")
+	jaAgain := request("ja")
+	if ja.response.body != "ja" || en.response.body != "en" || jaAgain.response.body != "ja" {
+		t.Fatalf("vary bodies: ja=%q en=%q jaAgain=%q", ja.response.body, en.response.body, jaAgain.response.body)
+	}
+	if jaAgain.response.cacheStatus != "HIT" {
+		t.Fatalf("vary hit status: got %q", jaAgain.response.cacheStatus)
+	}
+	if originRequests != 2 {
+		t.Fatalf("origin requests: got %d, want 2", originRequests)
+	}
+}
+
+func TestCachingTransportDoesNotCacheVaryWildcard(t *testing.T) {
+	var originRequests int
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		originRequests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Vary": {"*"}},
+			Body:       io.NopCloser(strings.NewReader("from origin")),
+			Request:    req,
+		}, nil
+	})
+	transport := newCachingTransport(
+		origin,
+		mustNewMemoryCache(t, 1024, 512),
+		time.Minute,
+	)
+
+	performRequest(t, transport, http.MethodGet)
+	performRequest(t, transport, http.MethodGet)
+	if originRequests != 2 {
+		t.Fatalf("origin requests: got %d, want 2", originRequests)
+	}
+}
+
 func TestCachingTransportDoesNotCachePost(t *testing.T) {
 	originRequests := 0
 	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {

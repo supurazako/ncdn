@@ -46,7 +46,7 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 
 	key := req.URL.String()
-	if entry, ok := t.cache.getFresh(key); ok {
+	if entry, ok := t.cache.getFreshVariant(key, req); ok {
 		return responseFromCache(req, entry), nil
 	}
 
@@ -61,7 +61,7 @@ func (t *cachingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			return nil, req.Context().Err()
 		}
 
-		if entry, ok := t.cache.get(key); ok {
+		if entry, ok := t.cache.getFreshVariant(key, req); ok {
 			return responseFromCache(req, entry), nil
 		}
 
@@ -83,12 +83,12 @@ func (t *cachingTransport) fillCache(
 	}()
 
 	// The cache may have been filled between the first lookup and acquire.
-	if entry, ok := t.cache.getFresh(key); ok {
+	if entry, ok := t.cache.getFreshVariant(key, req); ok {
 		return responseFromCache(req, entry), nil
 	}
 
 	var stale *cacheEntry
-	if entry, ok := t.cache.peek(key); ok {
+	if entry, ok := t.cache.peekVariant(key, req); ok {
 		stale = &entry
 	}
 	return t.fetchFromOrigin(req, key, stale)
@@ -122,6 +122,10 @@ func (t *cachingTransport) fetchFromOrigin(
 	if !isCacheableResponse(resp) {
 		return resp, nil
 	}
+	vary, ok := responseVary(resp)
+	if !ok {
+		return resp, nil
+	}
 
 	header := resp.Header.Clone()
 	header.Del(cacheStatusHeader)
@@ -131,6 +135,8 @@ func (t *cachingTransport) fetchFromOrigin(
 		freshnessLifetime:    freshnessLifetime(resp, t.ttl, responseReceivedAt),
 		freshnessLifetimeSet: true,
 		initialAge:           responseInitialAge(resp, responseReceivedAt),
+		vary:                 vary,
+		varyValues:           requestVaryValues(req, vary),
 	}
 	maxBodyBytes := t.cache.maxCacheableBodyBytes(key, entry)
 	if maxBodyBytes < 0 ||
@@ -203,6 +209,39 @@ func isCacheableResponse(resp *http.Response) bool {
 	}
 
 	return true
+}
+
+func responseVary(resp *http.Response) ([]string, bool) {
+	var fields []string
+	seen := make(map[string]struct{})
+	for _, value := range resp.Header.Values("Vary") {
+		for _, part := range strings.Split(value, ",") {
+			name := strings.TrimSpace(part)
+			if name == "" {
+				continue
+			}
+			if name == "*" {
+				return nil, false
+			}
+			name = http.CanonicalHeaderKey(name)
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			fields = append(fields, name)
+		}
+	}
+	return fields, true
+}
+
+func requestVaryValues(req *http.Request, fields []string) http.Header {
+	values := make(http.Header)
+	for _, field := range fields {
+		for _, value := range req.Header.Values(field) {
+			values.Add(field, value)
+		}
+	}
+	return values
 }
 
 func responseFromCache(req *http.Request, entry cacheEntry) *http.Response {

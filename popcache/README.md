@@ -22,4 +22,6 @@ HTTP 200以外や容量上限を超えるresponseはcacheに保存できない�
 
 freshnessを過ぎたresponseは、`ETag`または`Last-Modified`があれば条件付きrequestでOriginへ再検証する。`304 Not Modified`の場合は保存済みの本文を再利用し、metadataとfreshnessを更新する。validatorがない場合はOriginから本文を取り直す。`stale-while-revalidate`は今後の対応とする。
 
+レスポンスに`Vary`がある場合は、指定されたrequest headerの値ごとにcache variantを分離する。`Vary: *`のレスポンスは保存しない。
+
 現在の使用量と設定値は`/statusz`の`cache`で確認できる。
