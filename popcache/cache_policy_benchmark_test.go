@@ -17,13 +17,45 @@ func newCachePolicyTrace() cachePolicyTrace {
 		keys     = 10_000
 		capacity = 1_000
 	)
-	random := rand.New(rand.NewSource(1))
-	distribution := rand.NewZipf(random, 1.15, 1, keys-1)
+	return newZipfTrace(1.15, requests, keys, capacity, 1)
+}
+
+func newZipfTrace(exponent float64, requests, keys, capacity int, seed int64) cachePolicyTrace {
+	random := rand.New(rand.NewSource(seed))
+	distribution := rand.NewZipf(random, exponent, 1, uint64(keys-1))
 	trace := make([]int, requests)
 	for index := range trace {
 		trace[index] = int(distribution.Uint64())
 	}
 	return cachePolicyTrace{keys: trace, capacity: capacity}
+}
+
+func TestCachePolicyHitRateAcrossTraces(t *testing.T) {
+	const (
+		requests = 100_000
+		keys     = 10_000
+	)
+	cases := []struct {
+		name     string
+		exponent float64
+		capacity int
+		seed     int64
+	}{
+		{name: "broad-capacity100", exponent: 1.05, capacity: 100, seed: 1},
+		{name: "broad-capacity1000", exponent: 1.05, capacity: 1_000, seed: 1},
+		{name: "moderate-capacity100", exponent: 1.15, capacity: 100, seed: 2},
+		{name: "moderate-capacity1000", exponent: 1.15, capacity: 1_000, seed: 2},
+		{name: "hot-capacity100", exponent: 1.5, capacity: 100, seed: 3},
+		{name: "hot-capacity1000", exponent: 1.5, capacity: 1_000, seed: 3},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			trace := newZipfTrace(test.exponent, requests, keys, test.capacity, test.seed)
+			lruHits := simulateLRU(trace.keys, trace.capacity)
+			clockHits := simulateClock(trace.keys, trace.capacity)
+			t.Logf("LRU hit ratio: %.4f, CLOCK hit ratio: %.4f, difference: %.4f", float64(lruHits)/requests, float64(clockHits)/requests, float64(clockHits-lruHits)/requests)
+		})
+	}
 }
 
 func BenchmarkCachePolicyTrace(b *testing.B) {
