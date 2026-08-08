@@ -12,6 +12,7 @@ import (
 )
 
 const cacheStatusHeader = "X-NCDN-Cache"
+const canonicalCacheStatusHeader = "X-Ncdn-Cache"
 
 type cachingTransport struct {
 	base   http.RoundTripper
@@ -281,8 +282,10 @@ func responseFromCacheWithStatus(req *http.Request, entry cacheEntry, status str
 
 func responseFromCacheAt(req *http.Request, entry cacheEntry, status string, now time.Time) *http.Response {
 	header := entry.header.Clone()
-	header.Set(cacheStatusHeader, status)
-	header.Set("Age", strconv.FormatInt(int64(entry.currentAge(now)/time.Second), 10))
+	// These keys are already canonical. Assign directly to avoid the repeated
+	// MIME header canonicalization performed by Header.Set on every cache hit.
+	header[canonicalCacheStatusHeader] = []string{status}
+	header["Age"] = []string{strconv.FormatInt(int64(entry.currentAge(now)/time.Second), 10)}
 	statusText := entry.status
 	if statusText == "" {
 		statusText = formatHTTPStatus(entry.statusCode)
