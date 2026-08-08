@@ -12,6 +12,7 @@ import (
 type cacheEntry struct {
 	statusCode int
 	status     string
+	fastKey    requestCacheKey
 	header     http.Header
 	body       []byte
 	storedAt   time.Time
@@ -25,6 +26,46 @@ type cacheEntry struct {
 	varyValues           http.Header
 	staleWhileRevalidate time.Duration
 	staleIfError         time.Duration
+}
+
+// requestCacheKey mirrors the URL components used by URL.String without
+// allocating a new combined string on the cache-hit path.
+type requestCacheKey struct {
+	scheme      string
+	host        string
+	path        string
+	rawPath     string
+	rawQuery    string
+	fragment    string
+	rawFragment string
+	opaque      string
+	user        string
+	forceQuery  bool
+	omitHost    bool
+}
+
+func newRequestCacheKey(req *http.Request) requestCacheKey {
+	url := req.URL
+	key := requestCacheKey{
+		scheme:      url.Scheme,
+		host:        url.Host,
+		path:        url.Path,
+		rawPath:     url.RawPath,
+		rawQuery:    url.RawQuery,
+		fragment:    url.Fragment,
+		rawFragment: url.RawFragment,
+		opaque:      url.Opaque,
+		forceQuery:  url.ForceQuery,
+		omitHost:    url.OmitHost,
+	}
+	if url.User != nil {
+		key.user = url.User.String()
+	}
+	return key
+}
+
+func (key requestCacheKey) empty() bool {
+	return key == (requestCacheKey{})
 }
 
 type cacheItem struct {
@@ -116,14 +157,18 @@ func (c *memoryCache) getFreshVariant(key string, req *http.Request) (cacheEntry
 	return c.getFreshVariantAt(key, req, time.Now())
 }
 
-func (c *memoryCache) getFreshVariantAt(key string, req *http.Request, now time.Time) (cacheEntry, bool) {
-	if value, ok := c.fastEntries.Load(key); ok {
+func (c *memoryCache) getFreshRequestVariant(req *http.Request, now time.Time) (cacheEntry, bool) {
+	fastKey := newRequestCacheKey(req)
+	if value, ok := c.fastEntries.Load(fastKey); ok {
 		item := value.(*cacheItem)
 		if item.entry.isFresh(now) && item.entry.matchesRequest(req) {
 			return cloneCacheEntryForRead(item.entry), true
 		}
 	}
+	return cacheEntry{}, false
+}
 
+func (c *memoryCache) getFreshVariantAt(key string, req *http.Request, now time.Time) (cacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -202,10 +247,10 @@ func (c *memoryCache) set(
 	}
 	element := c.lru.PushFront(item)
 	c.entries[key] = append(c.entries[key], element)
-	if len(c.entries[key]) == 1 && len(storedEntry.vary) == 0 {
-		c.fastEntries.Store(key, item)
+	if len(c.entries[key]) == 1 && len(storedEntry.vary) == 0 && !storedEntry.fastKey.empty() {
+		c.fastEntries.Store(storedEntry.fastKey, item)
 	} else {
-		c.fastEntries.Delete(key)
+		c.fastEntries.Delete(storedEntry.fastKey)
 	}
 	c.usedBytes += sizeBytes
 	return true
@@ -269,8 +314,8 @@ func (c *memoryCache) removeExpiredLocked(now time.Time) {
 
 func (c *memoryCache) removeElementLocked(element *list.Element) {
 	item := element.Value.(*cacheItem)
-	if value, ok := c.fastEntries.Load(item.key); ok && value.(*cacheItem) == item {
-		c.fastEntries.Delete(item.key)
+	if value, ok := c.fastEntries.Load(item.entry.fastKey); ok && value.(*cacheItem) == item {
+		c.fastEntries.Delete(item.entry.fastKey)
 	}
 	elements := c.entries[item.key]
 	for index, candidate := range elements {
@@ -284,8 +329,8 @@ func (c *memoryCache) removeElementLocked(element *list.Element) {
 	} else {
 		c.entries[item.key] = elements
 		remaining := elements[0].Value.(*cacheItem)
-		if len(elements) == 1 && len(remaining.entry.vary) == 0 {
-			c.fastEntries.Store(item.key, remaining)
+		if len(elements) == 1 && len(remaining.entry.vary) == 0 && !remaining.entry.fastKey.empty() {
+			c.fastEntries.Store(remaining.entry.fastKey, remaining)
 		}
 	}
 	c.lru.Remove(element)
