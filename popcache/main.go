@@ -69,14 +69,15 @@ func main() {
 		// return 204
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.Handle("/", &httputil.ReverseProxy{
+	proxy := &httputil.ReverseProxy{
 		Transport: newCachingTransport(nil, cache, *cacheTTL),
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetXForwarded()
 			r.Out.Header.Set("X-NCDN-PoPCache-NodeId", *nodeId)
 			r.SetURL(originURL)
 		},
-	})
+	}
+	mux.Handle("/", &cacheHitHandler{cache: cache, next: proxy})
 	if *http3ListenAddr != "" {
 		if *http3CertFile == "" || *http3KeyFile == "" {
 			log.Fatal("-http3CertFile and -http3KeyFile are required when HTTP/3 is enabled")
