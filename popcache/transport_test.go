@@ -60,6 +60,72 @@ func TestCachingTransportReturnsCachedResponse(t *testing.T) {
 	}
 }
 
+func BenchmarkCachingTransportCacheHit(b *testing.B) {
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Cache-Control": {"max-age=60"}},
+			Body:       io.NopCloser(strings.NewReader("cached response")),
+			Request:    req,
+		}, nil
+	})
+	cache, err := newMemoryCache(1<<20, 1<<20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	transport := newCachingTransport(origin, cache, time.Minute)
+	req, err := http.NewRequest(http.MethodGet, "http://origin.example/object", nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(req); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		response, err := transport.RoundTrip(req)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+	}
+}
+
+func BenchmarkCachingTransportCacheHitParallel(b *testing.B) {
+	origin := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Cache-Control": {"max-age=60"}},
+			Body:       io.NopCloser(strings.NewReader("cached response")),
+			Request:    req,
+		}, nil
+	})
+	cache, err := newMemoryCache(1<<20, 1<<20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	transport := newCachingTransport(origin, cache, time.Minute)
+	req, err := http.NewRequest(http.MethodGet, "http://origin.example/object", nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(req); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			response, err := transport.RoundTrip(req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_, _ = io.Copy(io.Discard, response.Body)
+			_ = response.Body.Close()
+		}
+	})
+}
+
 func TestFreshnessLifetimeUsesSharedCachePrecedence(t *testing.T) {
 	receivedAt := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
