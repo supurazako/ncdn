@@ -1,0 +1,48 @@
+name: ncdn-moq
+
+x-moq: &moq
+  image: ncdn-moq-ietf:933a443
+  build:
+    context: https://github.com/cloudflare/moq-rs.git#933a443d98b65bc536f0b6753e51a17b5eeaba15
+  environment:
+    RUST_LOG: info,quinn=warn
+
+services:
+  relay:
+    <<: *moq
+    entrypoint: moq-relay-ietf
+    command:
+      - --bind
+      - "[::]:4443"
+      - --tls-cert
+      - /certs/localhost.crt
+      - --tls-key
+      - /certs/localhost.key
+      - --dev
+    ports:
+      - "4443:4443/udp"
+    volumes:
+      - ./certs:/certs:ro
+
+  publisher:
+    <<: *moq
+    entrypoint: moq-clock-ietf
+    command:
+      - https://relay:4443
+      - --tls-disable-verify
+      - --publish
+    depends_on:
+      - relay
+    restart: on-failure
+
+  subscriber:
+    <<: *moq
+    entrypoint: moq-clock-ietf
+    command:
+      - https://relay:4443
+      - --tls-disable-verify
+    depends_on:
+      - relay
+      - publisher
+    restart: on-failure
+
