@@ -42,6 +42,8 @@ moq_relay_active_subscriptions=1
 moq_relay_active_tracks=1
 ```
 
+GUI dashboardは`http://localhost:3001/d/moq-relay-overview`で確認できる。loginは不要で、Relayの現在値、時間変化、購読解決時間を5秒間隔で表示する。
+
 生のmetricsは`http://localhost:9091/metrics`、Prometheusのquery UIは`http://localhost:9090`で確認できる。Prometheusでは、例えば次をqueryする。
 
 ```promql
