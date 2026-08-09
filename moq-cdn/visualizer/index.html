@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoQ CDN Visualizer</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/gh/video-dev/moq-js@6032b66cd7c6956612e7902a0caecd054154a572/demo/lib/moq-player.iife.js"></script>
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">NCDN · MEDIA OVER QUIC</p>
+      <h1>MoQ CDN Visualizer</h1>
+    </div>
+    <div id="live-state" class="live-state"><span></span> CONNECTING</div>
+  </header>
+
+  <main>
+    <section class="player-panel panel">
+      <div class="panel-heading">
+        <div>
+          <p class="label">LIVE TRACK</p>
+          <h2>/demo</h2>
+        </div>
+        <div id="player-state" class="pill">waiting</div>
+      </div>
+      <div class="video-frame">
+        <video-moq
+          id="moq-player"
+          src="https://100.94.113.55:4443?namespace=demo"
+          fingerprint="/relay-fingerprint"
+          width="960"
+          muted
+          controls>
+        </video-moq>
+        <div id="video-placeholder" class="video-placeholder">
+          <div class="spinner"></div>
+          <p>Connecting to MoQ video...</p>
+          <small>WebTransport → 100.94.113.55:4443/udp</small>
+        </div>
+      </div>
+      <div class="transport-strip">
+        <span>QUIC / WebTransport</span>
+        <span>H.264 · 960×540 · 30fps</span>
+        <span id="last-frame">No frame received</span>
+      </div>
+    </section>
+
+    <section class="topology-panel panel">
+      <div class="panel-heading">
+        <div>
+          <p class="label">LIVE TOPOLOGY</p>
+          <h2>Delivery path</h2>
+        </div>
+        <a href="http://localhost:3001/d/moq-relay-overview/moq-relay-overview" target="_blank">Grafana ↗</a>
+      </div>
+
+      <div class="topology">
+        <article class="node" id="publisher-node">
+          <div class="node-icon publisher-icon">P</div>
+          <div><strong>Video Publisher</strong><small>FFmpeg + moq-pub</small></div>
+          <i></i>
+        </article>
+
+        <div class="link" id="publish-link">
+          <span class="flow-dot"></span>
+          <b>MOQT</b>
+          <small>PUBLISH_NAMESPACE /demo</small>
+        </div>
+
+        <article class="node relay" id="relay-node">
+          <div class="node-icon relay-icon">R</div>
+          <div><strong>MoQ Relay</strong><small>debian · UDP 4443</small></div>
+          <i></i>
+        </article>
+
+        <div class="link" id="subscribe-link">
+          <span class="flow-dot second"></span>
+          <b>WebTransport</b>
+          <small>Tailscale direct UDP</small>
+        </div>
+
+        <article class="node" id="subscriber-node">
+          <div class="node-icon subscriber-icon">S</div>
+          <div><strong>Browser Subscriber</strong><small id="subscriber-detail">waiting</small></div>
+          <i></i>
+        </article>
+      </div>
+
+      <div class="metrics-grid">
+        <article><span>Connections</span><strong id="metric-connections">–</strong></article>
+        <article><span>Publishers</span><strong id="metric-publishers">–</strong></article>
+        <article><span>Subscriptions</span><strong id="metric-subscriptions">–</strong></article>
+        <article><span>Tracks</span><strong id="metric-tracks">–</strong></article>
+      </div>
+    </section>
+
+    <section class="events-panel panel">
+      <div class="panel-heading">
+        <div>
+          <p class="label">SESSION EVENTS</p>
+          <h2>Browser observation</h2>
+        </div>
+        <button id="clear-events" type="button">Clear</button>
+      </div>
+      <ol id="events"></ol>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

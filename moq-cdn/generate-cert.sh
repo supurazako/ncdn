@@ -6,7 +6,7 @@ cert_dir="${script_dir}/certs"
 
 mkdir -p "${cert_dir}"
 mkdir -p "${script_dir}/artifacts/qlog" "${script_dir}/artifacts/mlog"
-openssl req -x509 -newkey rsa:2048 -nodes \
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
 	-keyout "${cert_dir}/localhost.key" \
 	-out "${cert_dir}/localhost.crt" \
 	-days 10 \
