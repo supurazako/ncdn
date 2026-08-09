@@ -3,6 +3,7 @@ const placeholder = document.querySelector("#video-placeholder");
 const playerState = document.querySelector("#player-state");
 const liveState = document.querySelector("#live-state");
 const subscriberNode = document.querySelector("#subscriber-node");
+const originNode = document.querySelector("#origin-node");
 const subscriberDetail = document.querySelector("#subscriber-detail");
 const events = document.querySelector("#events");
 const lastFrame = document.querySelector("#last-frame");
@@ -26,6 +27,16 @@ function addEvent(kind, message) {
 function setPlayerState(state, detail) {
   playerState.textContent = state;
   subscriberDetail.textContent = detail;
+}
+
+function parseMetrics(text) {
+  const values = new Map();
+  for (const line of text.split("\n")) {
+    if (!line || line.startsWith("#")) continue;
+    const [name, value] = line.trim().split(/\s+/, 2);
+    values.set(name, value);
+  }
+  return values;
 }
 
 [
@@ -62,20 +73,21 @@ player.addEventListener("error", (event) => {
 
 async function refreshMetrics() {
   try {
-    const response = await fetch("/metrics", { cache: "no-store" });
-    if (!response.ok) throw new Error(`metrics HTTP ${response.status}`);
-    const text = await response.text();
-    const values = new Map();
-    for (const line of text.split("\n")) {
-      if (!line || line.startsWith("#")) continue;
-      const [name, value] = line.trim().split(/\s+/, 2);
-      values.set(name, value);
-    }
+    const edgeMetricsPath = window.selectedEdge === "c1" ? "/c1-metrics" : "/metrics";
+    const [response, originResponse] = await Promise.all([
+      fetch(edgeMetricsPath, { cache: "no-store" }),
+      fetch("/origin-metrics", { cache: "no-store" }),
+    ]);
+    if (!response.ok) throw new Error(`edge metrics HTTP ${response.status}`);
+    if (!originResponse.ok) throw new Error(`origin metrics HTTP ${originResponse.status}`);
+    const values = parseMetrics(await response.text());
+    const originValues = parseMetrics(await originResponse.text());
     for (const [name, element] of Object.entries(metricElements)) {
       element.textContent = values.get(name) ?? "0";
     }
     document.querySelector("#relay-node").classList.add("online");
-    if (Number(values.get("moq_relay_active_publishers") || 0) > 0) {
+    originNode.classList.add("online");
+    if (Number(originValues.get("moq_relay_active_publishers") || 0) > 0) {
       document.querySelector("#publisher-node").classList.add("online");
     }
   } catch (error) {

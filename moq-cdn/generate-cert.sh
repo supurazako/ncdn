@@ -5,7 +5,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cert_dir="${script_dir}/certs"
 
 mkdir -p "${cert_dir}"
-mkdir -p "${script_dir}/artifacts/qlog" "${script_dir}/artifacts/mlog"
+mkdir -p \
+	"${script_dir}/artifacts/qlog" \
+	"${script_dir}/artifacts/mlog" \
+	"${script_dir}/artifacts/c1/qlog" \
+	"${script_dir}/artifacts/c1/mlog" \
+	"${script_dir}/artifacts/origin/qlog" \
+	"${script_dir}/artifacts/origin/mlog"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
 	-keyout "${cert_dir}/localhost.key" \
 	-out "${cert_dir}/localhost.crt" \

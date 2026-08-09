@@ -6,4 +6,5 @@ scrape_configs:
     static_configs:
       - targets:
           - relay:9090
-
+          - edge-c1:9090
+          - origin-relay:9090

@@ -28,17 +28,49 @@ x-moq: &moq
     RUST_LOG: info,quinn=warn
 
 services:
+  origin-relay:
+    <<: *moq
+    entrypoint: moq-relay-ietf
+    command:
+      - --bind
+      - "[::]:4443"
+      - --node
+      - https://origin-relay:4443
+      - --tls-cert
+      - /certs/localhost.crt
+      - --tls-key
+      - /certs/localhost.key
+      - --coordinator-file
+      - /coordinator/moq.json
+      - --metrics-addr
+      - "0.0.0.0:9090"
+      - --qlog-dir
+      - /artifacts/origin/qlog
+      - --mlog-dir
+      - /artifacts/origin/mlog
+    ports:
+      - "9092:9090/tcp"
+    volumes:
+      - ./certs:/certs:ro
+      - ./artifacts:/artifacts
+      - coordinator-data:/coordinator
+
   relay:
     <<: *moq
     entrypoint: moq-relay-ietf
     command:
       - --bind
       - "[::]:4443"
+      - --node
+      - https://relay:4443
       - --tls-cert
       - /certs/localhost.crt
       - --tls-key
       - /certs/localhost.key
       - --dev
+      - --tls-disable-verify
+      - --coordinator-file
+      - /coordinator/moq.json
       - --metrics-addr
       - "0.0.0.0:9090"
       - --qlog-dir
@@ -54,16 +86,48 @@ services:
     volumes:
       - ./certs:/certs:ro
       - ./artifacts:/artifacts
+      - coordinator-data:/coordinator
+
+  edge-c1:
+    <<: *moq
+    entrypoint: moq-relay-ietf
+    command:
+      - --bind
+      - "[::]:4443"
+      - --node
+      - https://edge-c1:4443
+      - --tls-cert
+      - /certs/localhost.crt
+      - --tls-key
+      - /certs/localhost.key
+      - --dev
+      - --tls-disable-verify
+      - --coordinator-file
+      - /coordinator/moq.json
+      - --metrics-addr
+      - "0.0.0.0:9090"
+      - --qlog-dir
+      - /artifacts/c1/qlog
+      - --mlog-dir
+      - /artifacts/c1/mlog
+    ports:
+      - "4444:4443/udp"
+      - "4444:4443/tcp"
+      - "9093:9090/tcp"
+    volumes:
+      - ./certs:/certs:ro
+      - ./artifacts:/artifacts
+      - coordinator-data:/coordinator
 
   publisher:
     <<: *moq
     entrypoint: moq-clock-ietf
     command:
-      - https://relay:4443
+      - https://origin-relay:4443
       - --tls-disable-verify
       - --publish
     depends_on:
-      - relay
+      - origin-relay
     restart: on-failure
 
   video-publisher:
@@ -78,9 +142,9 @@ services:
           -g 60 -keyint_min 60 -sc_threshold 0 \
           -f mp4 -movflags empty_moov+frag_every_frame+separate_moof+omit_tfhd_offset - \
         | moq-pub --name demo --fps 30 --bitrate 1500000 \
-            --tls-disable-verify https://relay:4443
+            --tls-disable-verify https://origin-relay:4443
     depends_on:
-      - relay
+      - origin-relay
     restart: on-failure
 
   subscriber:
@@ -91,6 +155,17 @@ services:
       - --tls-disable-verify
     depends_on:
       - relay
+      - publisher
+    restart: on-failure
+
+  subscriber-c1:
+    <<: *moq
+    entrypoint: moq-clock-ietf
+    command:
+      - https://edge-c1:4443
+      - --tls-disable-verify
+    depends_on:
+      - edge-c1
       - publisher
     restart: on-failure
 
@@ -132,8 +207,10 @@ services:
       - ./observability/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - relay
+      - edge-c1
       - video-publisher
 
 volumes:
   prometheus-data:
   grafana-data:
+  coordinator-data:

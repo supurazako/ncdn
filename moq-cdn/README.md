@@ -1,11 +1,14 @@
 # MoQ CDN experiment
 
-HTTP PoPとは別に、Media over QUIC Transport（MOQT）のRelayをPoPとして動かす実験環境。
-最初の到達点は、時計Objectを次の経路で配信することである。
+HTTP PoPとは別に、Media over QUIC Transport（MOQT）のRelayをPoPとして動かす実験環境。Publisherを受けるOrigin Relayと、利用者へ配信するEdge Relayを分離する。
 
 ```text
-moq-clock publisher -> moq-relay-ietf -> moq-clock subscriber
+                           +-> C0 Edge Relay -> Subscriber / Browser
+Publisher -> Origin Relay -|
+                           +-> C1 Edge Relay -> Subscriber / Browser
 ```
+
+PublisherはOriginへ`/demo`や`/clock`をannounceする。C0/C1に購読が来ると、共有CoordinatorでNamespaceの所在を解決し、Originへの上流購読をオンデマンドで作成する。ブラウザ向けにC0はUDP 4443、C1はUDP 4444を公開し、OriginはDocker network内に閉じる。
 
 Cloudflareの`moq-rs`をcommit `69302d3dc2422e93b8a1d62f853a6759aa9e5468`に固定して利用する。このcommitとブラウザPlayerはIETF MOQT draft-14で揃えている。MOQTは策定中で実装間のwire compatibilityがdraft versionに依存するため、Relay、Publisher、Subscriber、Playerを同じdraftへ固定する。
 
@@ -29,22 +32,37 @@ docker compose logs -f subscriber
 
 ## 観測
 
-RelayはPrometheus形式のmetricsを公開する。PublisherとSubscriberが接続した状態で、主要なgaugeを確認できる。
+各RelayはPrometheus形式のmetricsを公開する。C0は`http://localhost:9091/metrics`、Originは`http://localhost:9092/metrics`、C1は`http://localhost:9093/metrics`で確認できる。
 
 ```sh
 ./verify-observability.sh
 ```
 
 ```text
-moq_relay_active_connections=2
-moq_relay_active_publishers=1
-moq_relay_active_subscriptions=1
-moq_relay_active_tracks=1
+c0.moq_relay_active_connections=1
+c0.moq_relay_upstream_connections=1
+c0.moq_relay_active_subscriptions=1
+c0.moq_relay_active_tracks=1
+c1.moq_relay_active_connections=1
+c1.moq_relay_upstream_connections=1
+c1.moq_relay_active_subscriptions=1
+c1.moq_relay_active_tracks=1
+origin.moq_relay_active_connections=3
+origin.moq_relay_active_publishers=2
+origin.moq_relay_active_subscriptions=1
+origin.moq_relay_active_tracks=1
 ```
 
 GUI dashboardは`http://localhost:3001/d/moq-relay-overview`で確認できる。loginは不要で、Relayの現在値、時間変化、購読解決時間を5秒間隔で表示する。
 
-映像と配信経路を同時に見る専用Visualizerは`http://localhost:3002`で確認できる。VisualizerのHTMLはTCPで配信するが、埋め込まれたPlayerはTailscale経由で`100.94.113.55:4443/udp`のRelayへ直接WebTransport接続する。
+映像と配信経路を同時に見る専用Visualizerは`http://localhost:3002`で確認できる。VisualizerのHTMLはTCPで配信するが、埋め込まれたPlayerはTailscale経由で選択したEdgeへ直接WebTransport接続する。
+
+Visualizer上部のEdge selector、またはURL queryで接続先を手動選択できる。
+
+```text
+http://localhost:3002/?edge=c0  # UDP 4443
+http://localhost:3002/?edge=c1  # UDP 4444
+```
 
 手元PCからSSH port forwardingで開く場合:
 

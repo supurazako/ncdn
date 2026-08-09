@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MoQ CDN Visualizer</title>
   <link rel="stylesheet" href="style.css">
-  <script src="https://cdn.jsdelivr.net/gh/video-dev/moq-js@6032b66cd7c6956612e7902a0caecd054154a572/demo/lib/moq-player.iife.js"></script>
 </head>
 <body>
   <header>
@@ -25,10 +24,13 @@
         </div>
         <div id="player-state" class="pill">waiting</div>
       </div>
+      <nav class="edge-selector" aria-label="Edge Relay">
+        <a href="?edge=c0" data-edge="c0">C0 · UDP 4443</a>
+        <a href="?edge=c1" data-edge="c1">C1 · UDP 4444</a>
+      </nav>
       <div class="video-frame">
         <video-moq
           id="moq-player"
-          src="https://100.94.113.55:4443?namespace=demo"
           fingerprint="/relay-fingerprint"
           width="960"
           muted
@@ -37,7 +39,7 @@
         <div id="video-placeholder" class="video-placeholder">
           <div class="spinner"></div>
           <p>Connecting to MoQ video...</p>
-          <small>WebTransport → 100.94.113.55:4443/udp</small>
+          <small id="transport-endpoint">WebTransport endpointを選択中...</small>
         </div>
       </div>
       <div class="transport-strip">
@@ -69,14 +71,26 @@
           <small>PUBLISH_NAMESPACE /demo</small>
         </div>
 
-        <article class="node relay" id="relay-node">
+        <article class="node relay" id="origin-node">
           <div class="node-icon relay-icon">R</div>
-          <div><strong>MoQ Relay</strong><small>debian · UDP 4443</small></div>
+          <div><strong>Origin Relay</strong><small>publisher ingress</small></div>
+          <i></i>
+        </article>
+
+        <div class="link" id="relay-link">
+          <span class="flow-dot second"></span>
+          <b>UPSTREAM SUBSCRIBE</b>
+          <small>on-demand relay-to-relay delivery</small>
+        </div>
+
+        <article class="node relay" id="relay-node">
+          <div class="node-icon relay-icon">E</div>
+          <div><strong id="edge-name">Edge Relay</strong><small id="edge-detail">selected edge</small></div>
           <i></i>
         </article>
 
         <div class="link" id="subscribe-link">
-          <span class="flow-dot second"></span>
+          <span class="flow-dot"></span>
           <b>WebTransport</b>
           <small>Tailscale direct UDP</small>
         </div>
@@ -108,6 +122,21 @@
     </section>
   </main>
 
+  <script>
+    const selectedEdge = new URLSearchParams(location.search).get("edge") === "c1" ? "c1" : "c0";
+    const edgePort = selectedEdge === "c1" ? 4444 : 4443;
+    document.querySelector("#moq-player").setAttribute(
+      "src",
+      `https://100.94.113.55:${edgePort}?namespace=demo`,
+    );
+    document.querySelector("#transport-endpoint").textContent =
+      `WebTransport → 100.94.113.55:${edgePort}/udp`;
+    document.querySelector("#edge-name").textContent = `Edge Relay ${selectedEdge.toUpperCase()}`;
+    document.querySelector("#edge-detail").textContent = `debian · UDP ${edgePort}`;
+    document.querySelector(`[data-edge="${selectedEdge}"]`).classList.add("selected");
+    window.selectedEdge = selectedEdge;
+  </script>
+  <script src="https://cdn.jsdelivr.net/gh/video-dev/moq-js@6032b66cd7c6956612e7902a0caecd054154a572/demo/lib/moq-player.iife.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
