@@ -6,6 +6,8 @@ HTTP PoPとは別に、Media over QUIC Transport（MOQT）のRelayをPoPとし�
                            +-> C0 Edge Relay -> Subscriber / Browser
 Publisher -> Origin Relay -|
                            +-> C1 Edge Relay -> Subscriber / Browser
+
+Browser -> Request Router --(Edge URL)--> C0 or C1
 ```
 
 PublisherはOriginへ`/demo`や`/clock`をannounceする。C0/C1に購読が来ると、共有CoordinatorでNamespaceの所在を解決し、Originへの上流購読をオンデマンドで作成する。ブラウザ向けにC0はUDP 4443、C1はUDP 4444を公開し、OriginはDocker network内に閉じる。
@@ -57,12 +59,34 @@ GUI dashboardは`http://localhost:3001/d/moq-relay-overview`で確認できる�
 
 映像と配信経路を同時に見る専用Visualizerは`http://localhost:3002`で確認できる。VisualizerのHTMLはTCPで配信するが、埋め込まれたPlayerはTailscale経由で選択したEdgeへ直接WebTransport接続する。
 
-Visualizer上部のEdge selector、またはURL queryで接続先を手動選択できる。
+Visualizer上部のselectorでは、自動振り分けと手動選択を切り替えられる。
 
 ```text
-http://localhost:3002/?edge=c0  # UDP 4443
-http://localhost:3002/?edge=c1  # UDP 4444
+http://localhost:3002/?strategy=round-robin
+http://localhost:3002/?strategy=rendezvous
+http://localhost:3002/?edge=c0
+http://localhost:3002/?edge=c1
 ```
+
+`round-robin`はリクエストごとにC0/C1を交互に返す比較用baselineである。`rendezvous`はNamespaceとEdge IDから決定的に接続先を選ぶため、同じNamespaceは同じEdgeへ集まりやすい。これにより、Edge間で同じ上流購読を重複して作ることを抑えられる。デフォルトは`rendezvous`。
+
+Request Router APIを直接確認する場合:
+
+```sh
+curl 'http://localhost:8080/route?namespace=/demo&strategy=round-robin'
+curl 'http://localhost:8080/route?namespace=/demo&strategy=rendezvous'
+curl 'http://localhost:8080/metrics'
+```
+
+Routerは映像データを中継しない。ブラウザへ接続先を返すcontrol planeであり、返答後のWebTransport通信はブラウザから選択されたEdgeへ直接流れる。
+
+回線を使わず、アルゴリズムの性質だけを再現可能な条件で比較できる。
+
+```sh
+curl -s 'http://localhost:8080/compare?namespaces=1000&requests_per_namespace=10' | jq
+```
+
+`imbalance_percent`はEdge間の選択数の偏り、`average_edges_per_namespace`は同じNamespaceが平均何台へ散ったか、`remapped_after_add_percent`はEdgeを1台追加した際に割当が移動したNamespaceの割合を表す。
 
 手元PCからSSH port forwardingで開く場合:
 
@@ -112,7 +136,7 @@ RelayはhostのUDP 4443を公開する。自己署名証明書と`--tls-disable-
 
 ## 次の段階
 
-1. 単一RelayでObject、Track、Groupとpublish/subscribeの流れを観察する
-2. Relayを2台に増やし、PublisherからSubscriberまでの経路をPoP間接続にする
-3. 接続数、受信Object数、遅延、dropを計測する
-4. 混雑またはRelay停止時に、どのObjectを届けて何を捨てるか検討する
+1. Round RobinとRendezvousで、Edge負荷と上流購読の重複を比較する
+2. Edge追加・削除時にNamespaceの割り当てがどれだけ移動するか計測する
+3. Edge負荷に上限を設けたbounded-load Rendezvousを追加する
+4. startup latency、受信Object数、dropを含めてアルゴリズムを比較する

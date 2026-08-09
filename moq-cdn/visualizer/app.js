@@ -97,6 +97,7 @@ async function refreshMetrics() {
 }
 
 document.querySelector("#clear-events").addEventListener("click", () => events.replaceChildren());
+addEvent("ROUTE", `${window.selectedStrategy} selected ${window.selectedEdge.toUpperCase()} for /demo`);
 addEvent("SYSTEM", "Visualizer initialized");
 refreshMetrics();
 setInterval(refreshMetrics, 2000);

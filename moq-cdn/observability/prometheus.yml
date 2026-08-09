@@ -8,3 +8,8 @@ scrape_configs:
           - relay:9090
           - edge-c1:9090
           - origin-relay:9090
+
+  - job_name: moq-router
+    static_configs:
+      - targets:
+          - router:8080

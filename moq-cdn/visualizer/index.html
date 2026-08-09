@@ -25,6 +25,8 @@
         <div id="player-state" class="pill">waiting</div>
       </div>
       <nav class="edge-selector" aria-label="Edge Relay">
+        <a href="?strategy=round-robin" data-strategy="round-robin">AUTO · Round Robin</a>
+        <a href="?strategy=rendezvous" data-strategy="rendezvous">AUTO · Rendezvous</a>
         <a href="?edge=c0" data-edge="c0">C0 · UDP 4443</a>
         <a href="?edge=c1" data-edge="c1">C1 · UDP 4444</a>
       </nav>
@@ -122,21 +124,6 @@
     </section>
   </main>
 
-  <script>
-    const selectedEdge = new URLSearchParams(location.search).get("edge") === "c1" ? "c1" : "c0";
-    const edgePort = selectedEdge === "c1" ? 4444 : 4443;
-    document.querySelector("#moq-player").setAttribute(
-      "src",
-      `https://100.94.113.55:${edgePort}?namespace=demo`,
-    );
-    document.querySelector("#transport-endpoint").textContent =
-      `WebTransport → 100.94.113.55:${edgePort}/udp`;
-    document.querySelector("#edge-name").textContent = `Edge Relay ${selectedEdge.toUpperCase()}`;
-    document.querySelector("#edge-detail").textContent = `debian · UDP ${edgePort}`;
-    document.querySelector(`[data-edge="${selectedEdge}"]`).classList.add("selected");
-    window.selectedEdge = selectedEdge;
-  </script>
-  <script src="https://cdn.jsdelivr.net/gh/video-dev/moq-js@6032b66cd7c6956612e7902a0caecd054154a572/demo/lib/moq-player.iife.js"></script>
-  <script src="app.js"></script>
+  <script src="bootstrap.js"></script>
 </body>
 </html>
