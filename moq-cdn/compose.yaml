@@ -1,9 +1,26 @@
 name: ncdn-moq
 
 x-moq: &moq
-  image: ncdn-moq-ietf:933a443
+  image: ncdn-moq-observable:933a443
   build:
     context: https://github.com/cloudflare/moq-rs.git#933a443d98b65bc536f0b6753e51a17b5eeaba15
+    dockerfile_inline: |
+      FROM rust:bookworm AS builder
+      WORKDIR /build
+      COPY . ./
+      RUN --mount=type=cache,target=/usr/local/cargo/registry \
+          --mount=type=cache,target=/build/target \
+          cargo build --release \
+            -p moq-relay-ietf --features metrics-prometheus \
+            -p moq-clock-ietf && \
+          cp /build/target/release/moq-relay-ietf /usr/local/cargo/bin/ && \
+          cp /build/target/release/moq-clock-ietf /usr/local/cargo/bin/
+      FROM debian:bookworm-slim
+      RUN apt-get update && \
+          apt-get install -y --no-install-recommends ca-certificates libssl3 && \
+          rm -rf /var/lib/apt/lists/*
+      COPY --from=builder /usr/local/cargo/bin/moq-relay-ietf /usr/local/bin/
+      COPY --from=builder /usr/local/cargo/bin/moq-clock-ietf /usr/local/bin/
   environment:
     RUST_LOG: info,quinn=warn
 
@@ -19,10 +36,21 @@ services:
       - --tls-key
       - /certs/localhost.key
       - --dev
+      - --metrics-addr
+      - "0.0.0.0:9090"
+      - --qlog-dir
+      - /artifacts/qlog
+      - --qlog-serve
+      - --mlog-dir
+      - /artifacts/mlog
+      - --mlog-serve
     ports:
       - "4443:4443/udp"
+      - "4443:4443/tcp"
+      - "9091:9090/tcp"
     volumes:
       - ./certs:/certs:ro
+      - ./artifacts:/artifacts
 
   publisher:
     <<: *moq
@@ -46,3 +74,18 @@ services:
       - publisher
     restart: on-failure
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - relay
+
+volumes:
+  prometheus-data:

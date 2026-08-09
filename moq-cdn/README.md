@@ -27,6 +27,31 @@ docker compose up --build
 docker compose logs -f subscriber
 ```
 
+## 観測
+
+RelayはPrometheus形式のmetricsを公開する。PublisherとSubscriberが接続した状態で、主要なgaugeを確認できる。
+
+```sh
+./verify-observability.sh
+```
+
+```text
+moq_relay_active_connections=2
+moq_relay_active_publishers=1
+moq_relay_active_subscriptions=1
+moq_relay_active_tracks=1
+```
+
+生のmetricsは`http://localhost:9091/metrics`、Prometheusのquery UIは`http://localhost:9090`で確認できる。Prometheusでは、例えば次をqueryする。
+
+```promql
+moq_relay_active_connections
+rate(moq_relay_subscribers_total[1m])
+histogram_quantile(0.95, rate(moq_relay_subscribe_latency_seconds_bucket[5m]))
+```
+
+QUIC connection単位のqlogは`artifacts/qlog/`、MoQのmessage logは`artifacts/mlog/`へ保存する。通常のRelay logは「何が起きたか」、Prometheusは「現在値と時間変化」、qlog/mlogは「なぜその通信になったか」の調査に使う。
+
 停止する場合:
 
 ```sh
@@ -41,4 +66,3 @@ RelayはhostのUDP 4443を公開する。自己署名証明書と`--tls-disable-
 2. Relayを2台に増やし、PublisherからSubscriberまでの経路をPoP間接続にする
 3. 接続数、受信Object数、遅延、dropを計測する
 4. 混雑またはRelay停止時に、どのObjectを届けて何を捨てるか検討する
-
