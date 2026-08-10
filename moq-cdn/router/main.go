@@ -48,6 +48,22 @@ type comparisonResponse struct {
 	Namespaces           int                `json:"namespaces"`
 	RequestsPerNamespace int                `json:"requests_per_namespace"`
 	Results              []comparisonResult `json:"results"`
+	LoadExperiment       loadExperiment     `json:"load_experiment"`
+}
+
+type loadExperiment struct {
+	HotNamespaceRequests int                    `json:"hot_namespace_requests"`
+	LoadBoundPercent     int                    `json:"load_bound_percent"`
+	Results              []loadComparisonResult `json:"results"`
+}
+
+type loadComparisonResult struct {
+	Strategy                  string         `json:"strategy"`
+	Selections                map[string]int `json:"selections"`
+	MaximumLoadPercentOfMean  float64        `json:"maximum_load_percent_of_mean"`
+	UpstreamSubscriptions     int            `json:"upstream_subscriptions"`
+	AverageEdgesPerNamespace  float64        `json:"average_edges_per_namespace"`
+	NamespacesUsingSecondEdge int            `json:"namespaces_using_second_edge"`
 }
 
 func newRouter(edges []edge) (*router, error) {
@@ -195,6 +211,16 @@ func (r *router) compareHandler(w http.ResponseWriter, request *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	hotNamespaceRequests, err := positiveIntParameter(request, "hot_namespace_requests", 5000, 1000000)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	loadBoundPercent, err := positiveIntParameter(request, "load_bound_percent", 125, 1000)
+	if err != nil || loadBoundPercent < 100 {
+		http.Error(w, "load_bound_percent must be between 100 and 1000", http.StatusBadRequest)
+		return
+	}
 
 	response := comparisonResponse{
 		Namespaces:           namespaces,
@@ -203,9 +229,107 @@ func (r *router) compareHandler(w http.ResponseWriter, request *http.Request) {
 			compareStrategy("round-robin", r.edges, namespaces, requestsPerNamespace),
 			compareStrategy("rendezvous", r.edges, namespaces, requestsPerNamespace),
 		},
+		LoadExperiment: compareLoadStrategies(
+			r.edges,
+			namespaces,
+			requestsPerNamespace,
+			hotNamespaceRequests,
+			loadBoundPercent,
+		),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response)
+}
+
+func compareLoadStrategies(edges []edge, namespaceCount, regularRequests, hotRequests, loadBoundPercent int) loadExperiment {
+	demands := make([]int, namespaceCount)
+	for index := range demands {
+		demands[index] = regularRequests
+	}
+	demands[0] = hotRequests
+
+	return loadExperiment{
+		HotNamespaceRequests: hotRequests,
+		LoadBoundPercent:     loadBoundPercent,
+		Results: []loadComparisonResult{
+			simulateLoadStrategy("round-robin", edges, demands, loadBoundPercent),
+			simulateLoadStrategy("rendezvous", edges, demands, loadBoundPercent),
+			simulateLoadStrategy("bounded-rendezvous", edges, demands, loadBoundPercent),
+		},
+	}
+}
+
+func simulateLoadStrategy(strategy string, edges []edge, demands []int, loadBoundPercent int) loadComparisonResult {
+	selections := make(map[string]int, len(edges))
+	for _, candidate := range edges {
+		selections[candidate.ID] = 0
+	}
+
+	totalRequests := 0
+	for _, demand := range demands {
+		totalRequests += demand
+	}
+	mean := float64(totalRequests) / float64(len(edges))
+	capacity := int(mean*float64(loadBoundPercent)/100 + 0.999999)
+	roundRobinIndex := 0
+	upstreamSubscriptions := 0
+	namespacesUsingSecondEdge := 0
+
+	for namespaceIndex, demand := range demands {
+		namespace := fmt.Sprintf("/experiment/%d", namespaceIndex)
+		seen := make(map[string]struct{}, len(edges))
+		for range demand {
+			var selected edge
+			switch strategy {
+			case "round-robin":
+				selected = edges[roundRobinIndex%len(edges)]
+				roundRobinIndex++
+			case "bounded-rendezvous":
+				selected = boundedRendezvous(namespace, edges, selections, capacity)
+			default:
+				selected = rendezvous(namespace, edges)
+			}
+			selections[selected.ID]++
+			seen[selected.ID] = struct{}{}
+		}
+		upstreamSubscriptions += len(seen)
+		if len(seen) > 1 {
+			namespacesUsingSecondEdge++
+		}
+	}
+
+	maximum := 0
+	for _, count := range selections {
+		if count > maximum {
+			maximum = count
+		}
+	}
+	return loadComparisonResult{
+		Strategy:                  strategy,
+		Selections:                selections,
+		MaximumLoadPercentOfMean:  float64(maximum) * 100 / mean,
+		UpstreamSubscriptions:     upstreamSubscriptions,
+		AverageEdgesPerNamespace:  float64(upstreamSubscriptions) / float64(len(demands)),
+		NamespacesUsingSecondEdge: namespacesUsingSecondEdge,
+	}
+}
+
+func boundedRendezvous(namespace string, edges []edge, loads map[string]int, capacity int) edge {
+	ranked := append([]edge(nil), edges...)
+	sort.Slice(ranked, func(left, right int) bool {
+		leftScore := rendezvousScore(namespace, ranked[left].ID)
+		rightScore := rendezvousScore(namespace, ranked[right].ID)
+		if leftScore == rightScore {
+			return ranked[left].ID < ranked[right].ID
+		}
+		return leftScore > rightScore
+	})
+	for _, candidate := range ranked {
+		if loads[candidate.ID] < capacity {
+			return candidate
+		}
+	}
+	return ranked[0]
 }
 
 func positiveIntParameter(request *http.Request, name string, fallback, maximum int) (int, error) {

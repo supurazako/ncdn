@@ -88,6 +88,10 @@ curl -s 'http://localhost:8080/compare?namespaces=1000&requests_per_namespace=10
 
 `imbalance_percent`はEdge間の選択数の偏り、`average_edges_per_namespace`は同じNamespaceが平均何台へ散ったか、`remapped_after_add_percent`はEdgeを1台追加した際に割当が移動したNamespaceの割合を表す。
 
+同じAPIの`load_experiment`は、`/experiment/0`だけをhot Namespaceとして、通常のRendezvousと負荷上限付きRendezvousを比較する。既定の`load_bound_percent=125`は、各Edgeの平均負荷の125%までprimary Edgeへの集約を許し、それを超えたrequestだけを次点のEdgeへ送るという意味である。
+
+これはアルゴリズムのトレードオフを確認するsimulationであり、実際のRelay負荷を参照して本番のrouteを変更する機能ではない。
+
 手元PCからSSH port forwardingで開く場合:
 
 ```sh

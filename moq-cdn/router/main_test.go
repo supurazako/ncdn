@@ -130,4 +130,27 @@ func TestCompareHandler(t *testing.T) {
 	if comparison.Namespaces != 100 || comparison.RequestsPerNamespace != 4 || len(comparison.Results) != 2 {
 		t.Fatalf("unexpected response: %+v", comparison)
 	}
+	if len(comparison.LoadExperiment.Results) != 3 {
+		t.Fatalf("got %d load results, want 3", len(comparison.LoadExperiment.Results))
+	}
+}
+
+func TestBoundedRendezvousTradesAffinityForLoadBound(t *testing.T) {
+	experiment := compareLoadStrategies(testEdges, 1000, 10, 5000, 125)
+	plain := experiment.Results[1]
+	bounded := experiment.Results[2]
+
+	if bounded.MaximumLoadPercentOfMean > 125.1 {
+		t.Fatalf("bounded maximum load: got %.2f%%, want at most 125%%", bounded.MaximumLoadPercentOfMean)
+	}
+	if bounded.MaximumLoadPercentOfMean >= plain.MaximumLoadPercentOfMean {
+		t.Fatalf("bounded load %.2f%% should be lower than rendezvous %.2f%%", bounded.MaximumLoadPercentOfMean, plain.MaximumLoadPercentOfMean)
+	}
+	if bounded.UpstreamSubscriptions <= plain.UpstreamSubscriptions {
+		t.Fatalf(
+			"bounded upstream subscriptions %d should exceed rendezvous %d",
+			bounded.UpstreamSubscriptions,
+			plain.UpstreamSubscriptions,
+		)
+	}
 }
