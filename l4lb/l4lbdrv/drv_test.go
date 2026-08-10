@@ -17,7 +17,11 @@ var pcapWriter *pcapgo.Writer
 
 func expectStatCounters() bool {
 	variant := os.Getenv("L4LB_VARIANT")
-	return variant != "no-stats" && variant != "minimal"
+	return variant != "no-stats" && variant != "fast-combined" && variant != "minimal"
+}
+
+func expectL2DSR() bool {
+	return os.Getenv("L4LB_VARIANT") == "l2-dsr"
 }
 
 func DumpDebugPcap(b []byte) {
@@ -108,6 +112,17 @@ func TestL4LBIPv4InIPv6(t *testing.T) {
 		t.Fatalf("Expected XDP_TX but got %s", XdpRetValToString(retval))
 	}
 	DumpDebugPcap(out)
+	if expectL2DSR() {
+		packet := gopacket.NewPacket(out, layers.LayerTypeEthernet, gopacket.Default)
+		ethernet := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+		if got, want := ethernet.DstMAC, cfg.Dests[1].HardwareAddr; !bytes.Equal(got, want) {
+			t.Fatalf("Ethernet destination = %s, want %s", got, want)
+		}
+		if packet.Layer(layers.LayerTypeIPv4) == nil || packet.Layer(layers.LayerTypeIPv6) != nil {
+			t.Fatalf("L2 DSR did not preserve the IPv4 packet: %s", packet.Dump())
+		}
+		return
+	}
 
 	packet := gopacket.NewPacket(out, layers.LayerTypeEthernet, gopacket.Default)
 	outer, ok := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
@@ -199,6 +214,17 @@ func TestL4LBIPv6InIPv6(t *testing.T) {
 	}
 	if retval != XDP_TX {
 		t.Fatalf("Expected XDP_TX but got %s", XdpRetValToString(retval))
+	}
+	if expectL2DSR() {
+		packet := gopacket.NewPacket(out, layers.LayerTypeEthernet, gopacket.Default)
+		ethernet := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+		if got, want := ethernet.DstMAC, cfg.Dests[1].HardwareAddr; !bytes.Equal(got, want) {
+			t.Fatalf("Ethernet destination = %s, want %s", got, want)
+		}
+		if packet.Layer(layers.LayerTypeIPv6) == nil {
+			t.Fatalf("L2 DSR did not preserve the IPv6 packet: %s", packet.Dump())
+		}
+		return
 	}
 
 	packet := gopacket.NewPacket(out, layers.LayerTypeEthernet, gopacket.Default)

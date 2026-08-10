@@ -116,10 +116,15 @@ function read_lb_stat() {
 function read_forwarded_packets() {
     local total=0
     local ns
+    local interface=v6tun0
+
+    if [ "${L4LB_VARIANT}" = "l2-dsr" ]; then
+        interface=net0
+    fi
 
     for ns in C0 C1; do
         total=$((total + $(sudo ip netns exec "${ns}" \
-            cat /sys/class/net/v6tun0/statistics/rx_packets)))
+            cat "/sys/class/net/${interface}/statistics/rx_packets")))
     done
     echo "${total}"
 }

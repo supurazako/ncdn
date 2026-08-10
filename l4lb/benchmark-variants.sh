@@ -2,14 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(readlink -f "$(dirname "$0")")
-VARIANTS=${VARIANTS:-"full no-stats inline-dest pow2-dests keep-padding minimal"}
+VARIANTS=${VARIANTS:-"full no-stats inline-dest pow2-dests keep-padding fast-combined l2-dsr minimal"}
 OUTPUT_DIR=${OUTPUT_DIR:-"/tmp/ncdn-l4lb-variants-$(date +%Y%m%d-%H%M%S)"}
 
 mkdir -p "${OUTPUT_DIR}"
 
 for variant in ${VARIANTS}; do
     case "${variant}" in
-        full|no-stats|inline-dest|pow2-dests|keep-padding|minimal) ;;
+        full|no-stats|inline-dest|pow2-dests|keep-padding|fast-combined|l2-dsr|minimal) ;;
         *)
             echo "Unknown variant: ${variant}" >&2
             exit 2

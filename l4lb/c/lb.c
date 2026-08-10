@@ -178,7 +178,7 @@ static __always_inline uint32_t select_destination(uint32_t key,
   return (key % num_dests) + 1;
 }
 
-#if !L4LB_MINIMAL
+#if !L4LB_MINIMAL && !L4LB_L2_DSR
 static __always_inline uint16_t fold_checksum(uint32_t sum) {
   sum = (sum & 0xffff) + (sum >> 16);
   sum = (sum & 0xffff) + (sum >> 16);
@@ -676,6 +676,7 @@ int lb_main(struct xdp_md* ctx) {
   COUNT(c, rx_packet_total);
   COUNT_ADD(c, rx_total_size, data_end - data);
 
+#if !L4LB_L2_DSR
   if (inner_len > config->inner_mtu) {
     COUNT(c, mtu_exceeded_packet_total);
     // An ICMP error must never trigger another ICMP error.
@@ -687,6 +688,7 @@ int lb_main(struct xdp_md* ctx) {
     }
     EXIT(send_icmpv6_packet_too_big(ctx, c, config->inner_mtu));
   }
+#endif
 
   if (config->num_dests == 0) {
     COUNT(c, no_healthy_destination_total);
@@ -711,6 +713,19 @@ int lb_main(struct xdp_md* ctx) {
   }
   uint8_t* dest_ip6 = dest->ip6_address;
   uint8_t* dest_mac = dest->mac_address;
+#endif
+
+#if L4LB_L2_DSR
+  // The cache is directly reachable on the same Ethernet segment. Preserve
+  // the original IP packet and select a cache using only the destination MAC.
+  memcpy(eth->h_source, config->src_mac_address, ETH_ALEN);
+  memcpy(eth->h_dest, dest_mac, ETH_ALEN);
+  if (icmp_error_version == 4) {
+    COUNT(c, icmpv4_error_forwarded_total);
+  } else if (icmp_error_version == 6) {
+    COUNT(c, icmpv6_error_forwarded_total);
+  }
+  EXIT(XDP_TX);
 #endif
 
 #if !L4LB_KEEP_PADDING

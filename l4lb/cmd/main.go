@@ -19,7 +19,7 @@ import (
 )
 
 var lbBin = flag.String("lbBin", "", "Path to XDP lb binary; overrides -variant")
-var variant = flag.String("variant", "full", "XDP variant: full, no-stats, inline-dest, pow2-dests, keep-padding, or minimal")
+var variant = flag.String("variant", "full", "XDP variant: full, no-stats, inline-dest, pow2-dests, keep-padding, fast-combined, l2-dsr, or minimal")
 var xdpcapHookPath = flag.String("xdpcapHookPath", "/sys/fs/bpf/xdpcap_hook", "Path to XDPCap hook")
 var xdpif = flag.String("interface", "net0", "Interface to attach lb prog to")
 var xdpMode = flag.String("xdpMode", "auto", "XDP attach mode: auto, generic, or driver")
@@ -69,7 +69,8 @@ func main() {
 	flag.Parse()
 	validVariants := map[string]bool{
 		"full": true, "no-stats": true, "inline-dest": true,
-		"pow2-dests": true, "keep-padding": true, "minimal": true,
+		"pow2-dests": true, "keep-padding": true, "fast-combined": true,
+		"l2-dsr": true, "minimal": true,
 	}
 	if !validVariants[*variant] {
 		log.Fatalf("Invalid variant: %s", *variant)

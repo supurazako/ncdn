@@ -6,7 +6,7 @@ FORWARDING_TESTS='TestL4LBIPv4InIPv6|TestL4LBIPv6InIPv6'
 
 make -C "${SCRIPT_DIR}/c" variants
 
-for variant in full no-stats inline-dest pow2-dests keep-padding minimal; do
+for variant in full no-stats inline-dest pow2-dests keep-padding fast-combined l2-dsr minimal; do
     echo "Building and verifying ${variant}..."
     cp "${SCRIPT_DIR}/c/lb-${variant}.o" "${SCRIPT_DIR}/c/lb.o"
     if [ "${variant}" = "full" ] || [ "${variant}" = "inline-dest" ] || \

@@ -32,7 +32,9 @@ function verify_cache_path() {
         return 1
     fi
 
-    if [ "${family}" = "4" ]; then
+    if [ "${L4LB_VARIANT:-full}" = "l2-dsr" ]; then
+        echo "IPv${family}: L2 DSR -> PoP -> IPv6 Origin, MISS -> HIT: OK"
+    elif [ "${family}" = "4" ]; then
         echo "IPv4: IPv4-in-IPv6 -> PoP -> IPv6 Origin, MISS -> HIT: OK"
     else
         echo "IPv6: IPv6-in-IPv6 -> PoP -> IPv6 Origin, MISS -> HIT: OK"

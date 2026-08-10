@@ -48,7 +48,7 @@ benchmark中はcache serverの`/statusz`を起動しないため、L4LBのhealth
 
 ## L4LB variant比較
 
-同じsource treeから次の6種類をbuildできる。
+同じsource treeから次の8種類をbuildできる。
 
 | variant | hot pathの違い | 失うもの・制約 |
 |---|---|---|
@@ -57,6 +57,8 @@ benchmark中はcache serverの`/statusz`を起動しないため、L4LBのhealth
 | `inline-dest` | 設定と転送先2台を1つのmap valueにまとめ、destination map lookupを省略 | cache nodeは最大2台。bounds checkと配列計算が増える |
 | `pow2-dests` | backend数が2の冪なら剰余をbit maskへ置換 | 分岐が増える。非2冪では通常の剰余へfallback |
 | `keep-padding` | 小packetの末尾paddingをtrimするhelper呼び出しを省略 | wire byteが増え、末尾paddingを許容するNIC・受信側を前提にする |
+| `fast-combined` | `no-stats`、`pow2-dests`、`keep-padding`を同時に適用 | 各versionの制約が累積する |
+| `l2-dsr` | IP packetをencapせず、宛先MACだけをcacheへ変更 | L4LBとcache nodeを同じL2 segmentへ配置する必要がある |
 | `minimal` | TCP VIP判定、backend選択、IPv6 encapだけを残す | 統計、ICMPによるPMTUD応答、DSR ICMP error配送。性能上限の比較専用 |
 
 全versionは`make variants`で同時にbuildされ、1台のserverへ配置できる。起動時に`-variant`で使用するXDP objectを選ぶため、source treeやbinaryを交換する必要はない。`run-lb.sh`では環境変数から指定する。
