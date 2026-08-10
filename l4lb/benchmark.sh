@@ -14,6 +14,7 @@ WARMUP_DURATION=${WARMUP_DURATION:-1}
 MAX_FORWARDING_DROP_PERCENT=${MAX_FORWARDING_DROP_PERCENT:-0.1}
 MIN_TARGET_ACHIEVEMENT_PERCENT=${MIN_TARGET_ACHIEVEMENT_PERCENT:-95}
 MAX_TARGET_ACHIEVEMENT_PERCENT=${MAX_TARGET_ACHIEVEMENT_PERCENT:-105}
+export L4LB_VARIANT=${L4LB_VARIANT:-full}
 
 LB_PID=""
 LB_PROCESS_PID=""
@@ -346,6 +347,7 @@ function run_case() {
     fi
 
     awk -v family="${family}" \
+        -v variant="${L4LB_VARIANT}" \
         -v profile="${profile}" \
         -v target_pps="${target_rate}" \
         -v repetition="${repetition}" \
@@ -402,8 +404,8 @@ function run_case() {
             if (cpu_total_delta > 0) {
                 cpu = (cpu_total_delta - cpu_idle_delta) * 100 / cpu_total_delta
             }
-            printf "%s,%s,%d,%s,%s,%s,%s,%s,%.3f,%d,%d,%.0f,%s,%d,%d,%.4f,%s,%.6f,%s,%d,%.2f,%d,%d,%d,%d,%d,%d\n", \
-                family, profile, repetition, target_pps, xdp_mode, interface_type, rx_queues, tx_queues, \
+            printf "%s,%s,%s,%d,%s,%s,%s,%s,%s,%.3f,%d,%d,%.0f,%s,%d,%d,%.4f,%s,%.6f,%s,%d,%.2f,%d,%d,%d,%d,%d,%d\n", \
+                variant, family, profile, repetition, target_pps, xdp_mode, interface_type, rx_queues, tx_queues, \
                 seconds, parallel, packets, pps, \
                 target_achievement_percent, forwarded_packets, forwarding_dropped_packets, \
                 forwarding_drop_percent, sustainable, ingress_gbps, tcp_throughput_gbps, drops, cpu, \
@@ -482,7 +484,7 @@ go run "${SCRIPT_DIR}/benchmarkpkt" -family ipv6 \
     -src-mac "${u_mac}" -dst-mac "${r_mac}" -output "${TMP_DIR}/ipv6.pcap"
 
 read_xdp_metadata
-echo "family,profile,repetition,target_pps,xdp_mode,interface_type,rx_queues,tx_queues,duration_seconds,parallel,ingress_packets,ingress_pps,target_achievement_percent,forwarded_packets,forwarding_dropped_packets,forwarding_drop_percent,sustainable,ingress_gbps,tcp_throughput_gbps,rx_dropped,host_cpu_busy_percent,l4lb_rss_kib,l4lb_peak_rss_kib,l4lb_binary_bytes,bpf_program_memlock_bytes,bpf_maps_memlock_bytes,bpf_jited_bytes"
+echo "variant,family,profile,repetition,target_pps,xdp_mode,interface_type,rx_queues,tx_queues,duration_seconds,parallel,ingress_packets,ingress_pps,target_achievement_percent,forwarded_packets,forwarding_dropped_packets,forwarding_drop_percent,sustainable,ingress_gbps,tcp_throughput_gbps,rx_dropped,host_cpu_busy_percent,l4lb_rss_kib,l4lb_peak_rss_kib,l4lb_binary_bytes,bpf_program_memlock_bytes,bpf_maps_memlock_bytes,bpf_jited_bytes"
 for family in ipv4 ipv6; do
     if [ "${family}" = "ipv4" ]; then
         vip=192.0.2.10

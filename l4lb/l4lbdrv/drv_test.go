@@ -15,6 +15,11 @@ import (
 
 var pcapWriter *pcapgo.Writer
 
+func expectStatCounters() bool {
+	variant := os.Getenv("L4LB_VARIANT")
+	return variant != "no-stats" && variant != "minimal"
+}
+
 func DumpDebugPcap(b []byte) {
 	if pcapWriter == nil {
 		f, err := os.Create("/tmp/debug.pcap")
@@ -119,12 +124,14 @@ func TestL4LBIPv4InIPv6(t *testing.T) {
 		t.Errorf("Outer next header = %s, want IPv4", outer.NextHeader)
 	}
 
-	cnt, err := lb.bindings.ReadStatCountersAggregate()
-	if err != nil {
-		t.Fatalf("Failed to ReadStatCountersAggregate: %v", err)
-	}
-	if cnt.RxPacketTotal != 1 || cnt.Ipv4PacketTotal != 1 {
-		t.Errorf("Unexpected counters: %s", cnt)
+	if expectStatCounters() {
+		cnt, err := lb.bindings.ReadStatCountersAggregate()
+		if err != nil {
+			t.Fatalf("Failed to ReadStatCountersAggregate: %v", err)
+		}
+		if cnt.RxPacketTotal != 1 || cnt.Ipv4PacketTotal != 1 {
+			t.Errorf("Unexpected counters: %s", cnt)
+		}
 	}
 }
 
@@ -209,12 +216,14 @@ func TestL4LBIPv6InIPv6(t *testing.T) {
 		t.Errorf("Outer next header = %s, want IPv6", outer.NextHeader)
 	}
 
-	cnt, err := lb.bindings.ReadStatCountersAggregate()
-	if err != nil {
-		t.Fatalf("Failed to ReadStatCountersAggregate: %v", err)
-	}
-	if cnt.RxPacketTotal != 1 || cnt.Ipv6PacketTotal != 1 {
-		t.Errorf("Unexpected counters: %s", cnt)
+	if expectStatCounters() {
+		cnt, err := lb.bindings.ReadStatCountersAggregate()
+		if err != nil {
+			t.Fatalf("Failed to ReadStatCountersAggregate: %v", err)
+		}
+		if cnt.RxPacketTotal != 1 || cnt.Ipv6PacketTotal != 1 {
+			t.Errorf("Unexpected counters: %s", cnt)
+		}
 	}
 }
 

@@ -42,6 +42,7 @@ type Bindings struct {
 	XdpcapHook       *ebpf.Map     `ebpf:"xdpcap_hook"`
 	DestinationArray *ebpf.Map     `ebpf:"destinations_map"`
 	ConfigMap        *ebpf.Map     `ebpf:"lb_config_map"`
+	InlineConfigMap  *ebpf.Map     `ebpf:"inline_lb_config_map"`
 }
 
 func (b *Bindings) Close() error {
@@ -50,7 +51,16 @@ func (b *Bindings) Close() error {
 		b.XdpcapHook.Close(),
 		b.DestinationArray.Close(),
 		b.ConfigMap.Close(),
+		b.InlineConfigMap.Close(),
 	)
+}
+
+const inlineDestinationsSize = 2
+
+type inlineLbConfig struct {
+	Base             LbConfig
+	DestIP6Addresses [inlineDestinationsSize * 16]uint8
+	DestMACAddresses [inlineDestinationsSize * 6]uint8
 }
 
 func BindBalancer(binPath, xdpcapHookPath string) (*Bindings, error) {

@@ -45,3 +45,44 @@ benchmark中はcache serverの`/statusz`を起動しないため、L4LBのhealth
 `host_cpu_busy_percent`は測定中のホスト全体のCPU使用率であり、iperf client、cache node、ほかのホスト上の処理も含む。L4LBだけのCPU使用率ではない。
 
 この結果はvethとnetwork namespaceを使った同一ホスト内の比較用baselineであり、実NIC上の最大性能を表さない。実装変更の前後は、同じホスト、`DURATION`、`PARALLEL`、`PACKET_RATES`、`REPETITIONS`で比較する。実機性能はキャンプのハードウェア上で別途測定する。
+
+## L4LB variant比較
+
+同じsource treeから次の6種類をbuildできる。
+
+| variant | hot pathの違い | 失うもの・制約 |
+|---|---|---|
+| `full` | 通常実装 | なし。比較のbaseline |
+| `no-stats` | 統計map lookupとpacketごとのcounter更新を省略 | packet数やdrop理由の観測性 |
+| `inline-dest` | 設定と転送先2台を1つのmap valueにまとめ、destination map lookupを省略 | cache nodeは最大2台。bounds checkと配列計算が増える |
+| `pow2-dests` | backend数が2の冪なら剰余をbit maskへ置換 | 分岐が増える。非2冪では通常の剰余へfallback |
+| `keep-padding` | 小packetの末尾paddingをtrimするhelper呼び出しを省略 | wire byteが増え、末尾paddingを許容するNIC・受信側を前提にする |
+| `minimal` | TCP VIP判定、backend選択、IPv6 encapだけを残す | 統計、ICMPによるPMTUD応答、DSR ICMP error配送。性能上限の比較専用 |
+
+全versionは`make variants`で同時にbuildされ、1台のserverへ配置できる。起動時に`-variant`で使用するXDP objectを選ぶため、source treeやbinaryを交換する必要はない。`run-lb.sh`では環境変数から指定する。
+
+```console
+$ cd l4lb
+$ L4LB_VARIANT=pow2-dests ./run-lb.sh
+```
+
+切替にはL4LB processの再起動が必要だが、network topologyとcache nodeはそのまま利用できる。
+
+開発コンテナ内で各variantのbuildと対応する正常性testをまとめて実行する。
+
+```console
+$ cd l4lb
+$ ./verify-variants.sh
+```
+
+実機で全variantを同じ条件で順番に測定する場合:
+
+```console
+$ cd l4lb
+$ DURATION=30 REPETITIONS=5 PACKET_RATES="500000 1000000 2000000" \
+    OUTPUT_DIR=/tmp/l4lb-variants ./benchmark-variants.sh
+```
+
+結果は`OUTPUT_DIR`内のvariant別CSVへ分けて保存する。各CSVの`variant`列にもbuild種別を記録する。全variantで送信機、NIC、queue数、XDP attach mode、packet size、試行回数を揃える。
+
+`minimal`が最速でも、そのまま採用候補にはしない。`full`との差は、安全性と観測性を含む追加機能が性能へ与える総コストとして扱う。それ以外は個別のコストを切り分ける候補であり、実機で差が再現しない変更は採用しない。
