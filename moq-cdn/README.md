@@ -1,45 +1,61 @@
-# MoQ CDN DVR experiment
+# MoQ direct CDN experiment
 
-`moq-dev/moq`のRelay履歴キャッシュとFETCHを使い、ライブ映像を巻き戻せるPoPを試す環境。
+`moq-dev/moq`を使い、ブラウザがRelayからMoQを直接受信するPoP実験環境。
 
 ```text
-FFmpeg -> SRT -> moq-cli publisher -> moq-relay -> moq-cli HLS exporter -> Browser
-                                      [Group cache]       [Timeline + FETCH]
+FFmpeg -> SRT -> moq-cli publisher -> moq-relay -> Browser
+                                      [Group cache]  [WebTransport + WebCodecs]
 ```
+
+HLSへの変換は行わない。ブラウザは`@moq/watch`でMoQをSUBSCRIBEし、WebTransport上のQUICで受信した映像をWebCodecsでデコードしてcanvasへ描画する。
 
 ## 何を検証するか
 
-- ライブ映像を`SUBSCRIBE`相当の経路でRelayへ届ける
-- Relayが完了済みGroupを一定期間メモリに保持する
-- Timeline Trackから時刻とGroup IDの対応を得る
-- 過去segmentの要求をMoQのGroup `FETCH`へ変換する
-- ブラウザで一時停止、巻き戻し、ライブ端への復帰を行う
-
-Cloudflare DVR for Liveの外部仕様を参考に、タイムライン、pause/resume、ライブ端表示、`LIVE`への復帰を最初のUX目標にする。
+- PublisherからRelayへライブ映像を配信できる
+- ブラウザがRelayへ直接WebTransport接続できる
+- HLS segmentの完成を待たず、MoQのライブTrackをSUBSCRIBEできる
+- WebCodecsでH.264をデコードしてリアルタイム描画できる
+- Relayに完了済みGroupを保持し、今後のDVR `FETCH`実装に利用できる
 
 ## 固定バージョン
 
 - `moqdev/moq-relay:0.14.9`
 - `moqdev/moq-cli:0.9.9`
+- `@moq/watch:0.4.5`
 - `jrottenberg/ffmpeg:7.1-alpine`
-- `hls.js:1.6.13`
 
-RelayとCLIは現在`moq-lite-05`をネゴシエーションする。以前のcloudflare/moq-rs draft-14構成は`feature/moq-cdn-spike`ブランチに残している。
+以前のcloudflare/moq-rs draft-14構成は`feature/moq-cdn-spike`ブランチに残している。
 
 ## 起動
 
 ```sh
 cd moq-cdn
-docker compose up -d
+docker compose up -d --remove-orphans
 ```
 
-ブラウザで次を開く。
+ブラウザとサーバが同じホストなら次を開く。
 
 ```text
 http://localhost:3002
 ```
 
-シークバーを左へ動かすと過去GroupがFETCHされる。`LIVE位置へ戻る`を押すとplaylistの最新位置へ移動する。
+Tailscale経由ならサーバのTailscale IPを使う。
+
+```text
+http://100.94.113.55:3002
+```
+
+GUIは表示中のホスト名をRelayにも利用し、`http://<host>:4443/`を`@moq/watch`へ渡す。Publisherと同じRelay rootで`demo.hang`をSUBSCRIBEする。開発環境ではライブラリが`/certificate.sha256`を取得して自己署名証明書をpinし、実際のメディアはWebTransport/QUICで受信する。
+
+この実験ではWebSocket fallbackを無効にしている。QUICが確立しない場合にTCPで動作を継続せず、GUIとConsoleに接続エラーを出す。
+
+別のRelayを指定する場合：
+
+```text
+http://localhost:3002/?relay=100.94.113.55
+```
+
+SSHの`-L`はTCPしか転送しないため、GUIのHTMLは見えてもWebTransportのQUIC/UDPは運べない。リモートRelayの確認にはTailscaleなどUDPが到達する経路を使う。
 
 ## キャッシュ設定
 
@@ -51,11 +67,7 @@ capacity = "128MB"
 duration = "30s"
 ```
 
-- `capacity`: 全Trackで共有するGroup payloadの目標容量
-- `duration`: 最新以外のGroupを最後の書き込みまたはFETCHから保持する上限
-- 最新Group: ライブ端なので常に保持される
-
-HLS exporterのplaylist windowは20秒にしている。Relayの30秒保持より短いため、playlistに掲載したsegmentが取得前にexpireしにくい。
+直接プレイヤーは現在ライブSUBSCRIBEのみを利用する。キャッシュは次の段階で、過去GroupをFETCHして再生し、ライブ端でSUBSCRIBEへ切り替えるDVR機能に使う。
 
 ## 自動検証
 
@@ -63,27 +75,7 @@ HLS exporterのplaylist windowは20秒にしている。Relayの30秒保持よ�
 ./verify-observability.sh
 ```
 
-検証は次を確認する。
-
-1. Relay、Publisher、HLS exporterが起動している
-2. master playlistに映像renditionがある
-3. media playlistに複数の過去segmentがある
-4. 最古の掲載segmentを取得できる
-5. RelayログにそのGroupのFETCHが記録される
-
-手動で確認する場合：
-
-```sh
-curl http://localhost:8089/demo.hang/master.m3u8
-curl http://localhost:8089/demo.hang/video/0.avc3/media.m3u8
-docker compose logs relay | grep 'fetch started'
-```
-
-## 現在の範囲
-
-現在は1台のRelayをEdgeとして動かす最小構成。HLSはブラウザでDVR挙動を確認するためのegress adapterであり、履歴の正本はHLS serverではなくMoQ RelayのGroup cacheにある。
-
-次の段階ではOrigin RelayとEdge Relayを分離し、Edge cache miss時の上流FETCH、FETCH集約、Edgeごとのヒット率を扱う。
+自動検証はコンテナ、Relayのfingerprint endpoint、GUI、直接プレイヤー設定、PublisherからRelayへの配信を確認する。WebTransportとWebCodecsはブラウザAPIなので、最終確認はChromeのGUIで行う。
 
 停止：
 

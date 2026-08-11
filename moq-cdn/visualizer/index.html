@@ -19,31 +19,32 @@
     <section class="player-panel panel">
       <div class="panel-heading">
         <div>
-          <p class="label">LIVE + DVR TRACK</p>
+          <p class="label">DIRECT MOQ LIVE TRACK</p>
           <h2>demo.hang</h2>
         </div>
         <div id="player-state" class="pill">waiting</div>
       </div>
-      <nav class="edge-selector" aria-label="DVR controls">
-        <button id="go-live" type="button">LIVE位置へ戻る</button>
-        <span>シークバーで直近20秒を巻き戻せます</span>
-      </nav>
       <div class="video-frame">
-        <video
-          id="moq-player"
-          muted
-          controls>
-        </video>
+        <moq-watch-ui id="moq-player-ui">
+          <moq-watch
+            id="moq-player"
+            name="demo.hang"
+            muted
+            visible="always"
+            latency="real-time">
+            <canvas></canvas>
+          </moq-watch>
+        </moq-watch-ui>
         <div id="video-placeholder" class="video-placeholder">
           <div class="spinner"></div>
-          <p>Connecting to MoQ video...</p>
-          <small id="transport-endpoint">MoQ Timelineと過去Groupを取得中...</small>
+          <p>Connecting directly to MoQ...</p>
+          <small id="transport-endpoint">Relay endpointを決定中...</small>
         </div>
       </div>
       <div class="transport-strip">
-        <span>MoQ FETCH → HLS egress</span>
+        <span>MoQ → WebTransport → WebCodecs</span>
         <span>H.264 · 960×540 · 30fps · GOP 2s</span>
-        <span id="last-frame">No frame received</span>
+        <span id="last-frame">Waiting for frame</span>
       </div>
     </section>
 
@@ -75,43 +76,31 @@
           <i></i>
         </article>
 
-        <div class="link" id="relay-link">
-          <span class="flow-dot second"></span>
-          <b>GROUP CACHE</b>
-          <small>capacity 128MB · retention 30s</small>
-        </div>
-
-        <article class="node relay" id="relay-node">
-          <div class="node-icon relay-icon">E</div>
-          <div><strong id="edge-name">HLS Egress</strong><small id="edge-detail">Timeline + FETCH</small></div>
-          <i></i>
-        </article>
-
         <div class="link" id="subscribe-link">
-          <span class="flow-dot"></span>
-          <b>HLS</b>
-          <small>browser playback adapter</small>
+          <span class="flow-dot second"></span>
+          <b>WEBTRANSPORT / QUIC</b>
+          <small>direct MoQ SUBSCRIBE</small>
         </div>
 
         <article class="node" id="subscriber-node">
           <div class="node-icon subscriber-icon">S</div>
-          <div><strong>Browser Subscriber</strong><small id="subscriber-detail">waiting</small></div>
+          <div><strong>Browser Subscriber</strong><small id="subscriber-detail">WebCodecs waiting</small></div>
           <i></i>
         </article>
       </div>
 
       <div class="metrics-grid">
-        <article><span>Live delivery</span><strong>SUB</strong></article>
-        <article><span>Past delivery</span><strong>FETCH</strong></article>
-        <article><span>DVR window</span><strong>20s</strong></article>
-        <article><span>Cache TTL</span><strong>30s</strong></article>
+        <article><span>Delivery</span><strong>SUB</strong></article>
+        <article><span>Transport</span><strong>QUIC</strong></article>
+        <article><span>Decode</span><strong>WebCodecs</strong></article>
+        <article><span>Target</span><strong>real-time</strong></article>
       </div>
     </section>
 
     <section class="events-panel panel">
       <div class="panel-heading">
         <div>
-          <p class="label">SESSION EVENTS</p>
+          <p class="label">DIRECT SESSION</p>
           <h2>Browser observation</h2>
         </div>
         <button id="clear-events" type="button">Clear</button>
@@ -120,6 +109,6 @@
     </section>
   </main>
 
-  <script src="bootstrap.js"></script>
+  <script type="module" src="bootstrap.js"></script>
 </body>
 </html>

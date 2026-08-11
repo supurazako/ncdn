@@ -1,11 +1,20 @@
-const video = document.querySelector("#moq-player");
+const player = document.querySelector("#moq-player");
+const canvas = player.querySelector("canvas");
 const placeholder = document.querySelector("#video-placeholder");
 const playerState = document.querySelector("#player-state");
 const liveState = document.querySelector("#live-state");
 const events = document.querySelector("#events");
 const lastFrame = document.querySelector("#last-frame");
-const liveButton = document.querySelector("#go-live");
-const manifest = "/hls/demo.hang/master.m3u8";
+const endpoint = document.querySelector("#transport-endpoint");
+const subscriberDetail = document.querySelector("#subscriber-detail");
+
+function relayHost() {
+  const configured = new URLSearchParams(window.location.search).get("relay");
+  const host = configured || window.location.hostname || "localhost";
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+const relayUrl = `http://${relayHost()}:4443/`;
 
 function addEvent(kind, message) {
   const row = document.createElement("li");
@@ -16,56 +25,43 @@ function addEvent(kind, message) {
   while (events.children.length > 50) events.lastElementChild.remove();
 }
 
-function updateLiveState() {
-  if (!Number.isFinite(video.duration) || video.duration === 0) return;
-  const behind = Math.max(0, video.duration - video.currentTime);
-  const live = behind < 3;
-  liveState.className = `live-state ${live ? "live" : ""}`;
-  liveState.innerHTML = `<span></span> ${live ? "LIVE" : `${behind.toFixed(1)}s BEHIND`}`;
-  lastFrame.textContent = `DVR window ${video.duration.toFixed(1)}s`;
-}
-
-if (Hls.isSupported()) {
-  const hls = new Hls({
-    lowLatencyMode: true,
-    liveSyncDurationCount: 1,
-    liveMaxLatencyDurationCount: 3,
-  });
-  hls.loadSource(manifest);
-  hls.attachMedia(video);
-  hls.on(Hls.Events.MANIFEST_PARSED, () => {
-    playerState.textContent = "ready";
-    addEvent("MANIFEST", "MoQ FETCH-backed HLS timeline loaded");
-    video.play().catch(() => {});
-  });
-  hls.on(Hls.Events.ERROR, (_event, data) => {
-    addEvent("ERROR", `${data.type}: ${data.details}`);
-    if (data.fatal) {
-      playerState.textContent = "error";
-      liveState.className = "live-state error";
-      liveState.innerHTML = "<span></span> ERROR";
-    }
-  });
-} else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-  video.src = manifest;
-} else {
-  playerState.textContent = "HLS unsupported";
-}
-
-video.addEventListener("loadeddata", () => {
+function markLive() {
   placeholder.classList.add("hidden");
   playerState.textContent = "playing";
-  addEvent("MEDIA", "first decodable frame received");
-});
-video.addEventListener("timeupdate", updateLiveState);
-video.addEventListener("pause", () => addEvent("PLAYER", "paused inside DVR window"));
-video.addEventListener("play", () => addEvent("PLAYER", "playback resumed"));
+  liveState.className = "live-state live";
+  liveState.innerHTML = "<span></span> LIVE";
+  subscriberDetail.textContent = "WebTransport + WebCodecs active";
+  lastFrame.textContent = "Direct frame received";
+  document.querySelector("#origin-node").classList.add("online");
+  document.querySelector("#subscriber-node").classList.add("online");
+}
 
-liveButton.addEventListener("click", () => {
-  if (Number.isFinite(video.duration)) video.currentTime = video.duration;
-  video.play().catch(() => {});
-  addEvent("PLAYER", "jumped to live edge");
+endpoint.textContent = relayUrl;
+playerState.textContent = "connecting";
+// This experiment evaluates direct MoQ over QUIC. Do not silently turn a
+// failed WebTransport connection into a TCP/WebSocket session.
+player.connection.websocket = { enabled: false };
+player.setAttribute("url", relayUrl);
+addEvent("CONNECT", `${relayUrl} via WebTransport`);
+
+const rendered = new MutationObserver(() => {
+  if (canvas.width > 0 && canvas.height > 0) {
+    markLive();
+    addEvent("MEDIA", `WebCodecs rendered ${canvas.width}x${canvas.height}`);
+    rendered.disconnect();
+  }
+});
+rendered.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+
+player.addEventListener("play", () => addEvent("PLAYER", "direct MoQ playback started"));
+player.addEventListener("pause", () => addEvent("PLAYER", "playback paused"));
+player.addEventListener("error", (event) => {
+  const message = event.detail?.message || String(event.detail || "MoQ player error");
+  addEvent("ERROR", message);
+  playerState.textContent = "error";
+  liveState.className = "live-state error";
+  liveState.innerHTML = "<span></span> ERROR";
 });
 
 document.querySelector("#clear-events").addEventListener("click", () => events.replaceChildren());
-addEvent("SYSTEM", "moq-dev/moq DVR player initialized");
+addEvent("SYSTEM", "moq-dev direct player initialized");
