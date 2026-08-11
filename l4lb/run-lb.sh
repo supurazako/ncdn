@@ -13,7 +13,7 @@ export BIN_DIR=/tmp/ncdn-bin
 mkdir -p ${BIN_DIR}
 
 set -x
-(cd ${SRC_DIR}/l4lb/c && make variants)
+(cd ${SRC_DIR}/l4lb/c && make L4LB_VARIANT="${L4LB_VARIANT}" lb.o && cp lb.o "lb-${L4LB_VARIANT}.o")
 go build -o ${BIN_DIR}/l4lb ${SRC_DIR}/l4lb/cmd
 set +x
 
