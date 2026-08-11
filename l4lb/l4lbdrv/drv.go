@@ -198,6 +198,25 @@ func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
 		return fmt.Errorf("Failed to update ConfigMap: %w", err)
 	}
 
+	inlineConfig := inlineLbConfig{
+		Base: LbConfig{
+			Vip4Address:   vip4,
+			Vip6Address:   vip6,
+			SrcIp6Address: dests[0].IPv6Addr.As16(),
+			SrcMacAddress: [6]uint8(dests[0].HardwareAddr),
+			NumDests:      uint32(min(len(dests)-1, inlineDestinationsSize)),
+			InnerMtu:      innerMTU,
+		},
+	}
+	for index, destination := range dests[1:min(len(dests), inlineDestinationsSize+1)] {
+		ip6 := destination.IPv6Addr.As16()
+		copy(inlineConfig.DestIP6Addresses[index*16:(index+1)*16], ip6[:])
+		copy(inlineConfig.DestMACAddresses[index*6:(index+1)*6], destination.HardwareAddr)
+	}
+	if err := lb.bindings.InlineConfigMap.Update(uint32(0), &inlineConfig, 0); err != nil {
+		return fmt.Errorf("Failed to update InlineConfigMap: %w", err)
+	}
+
 	return nil
 }
 

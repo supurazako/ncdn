@@ -1,43 +1,57 @@
 SHELL := /bin/bash
 
-WORKSPACE := $(abspath .)
-DEVCONTAINER ?= $(shell command -v devcontainer 2>/dev/null || printf '%s' "$$HOME/.devcontainers/bin/devcontainer")
-DEVCONTAINER_LABEL := devcontainer.local_folder=$(WORKSPACE)
+GO ?= go
+GOOS ?= linux
+GOARCH ?= amd64
+CGO_ENABLED ?= 0
+DIST_ROOT ?= dist/$(GOOS)-$(GOARCH)
+GO_BUILD := CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build -trimpath -ldflags='-s -w'
+
+.DEFAULT_GOAL := help
 
 .PHONY: help
-help: ## Show available targets.
-	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "%-24s %s\n", $$1, $$2}'
+help: ## 利用可能なtargetを表示する
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+.PHONY: deploy
+deploy: deploy-l4lb deploy-l7lb deploy-origin ## Linux amd64向けの全roleをビルドする
+
+.PHONY: deploy-l4lb
+deploy-l4lb: ## L4LB本体とfull版XDP objectをビルドする
+	@mkdir -p "$(DIST_ROOT)/l4lb"
+	$(GO_BUILD) -o "$(DIST_ROOT)/l4lb/l4lb" ./l4lb/cmd
+	$(MAKE) --no-print-directory -C l4lb/c L4LB_VARIANT=full NCDN_STRIP=1 lb.o
+	cp l4lb/c/lb.o "$(DIST_ROOT)/l4lb/lb-full.o"
+	cp deploy/physical/l4lb/README.md "$(DIST_ROOT)/l4lb/README.md"
+
+.PHONY: deploy-l7lb
+deploy-l7lb: ## L7LB兼cache serverをビルドする
+	@mkdir -p "$(DIST_ROOT)/l7lb"
+	$(GO_BUILD) -o "$(DIST_ROOT)/l7lb/l7lb" ./popcache
+	cp deploy/physical/l7lb/README.md "$(DIST_ROOT)/l7lb/README.md"
+
+.PHONY: deploy-origin
+deploy-origin: ## Origin serverをビルドする
+	@mkdir -p "$(DIST_ROOT)/origin"
+	$(GO_BUILD) -o "$(DIST_ROOT)/origin/origin" ./origin
+	cp -R origin/templates origin/static "$(DIST_ROOT)/origin/"
+	cp deploy/physical/origin/README.md "$(DIST_ROOT)/origin/README.md"
+
+.PHONY: l4lb-variants
+l4lb-variants: ## 性能比較用の全XDP variantをビルドする
+	$(MAKE) --no-print-directory -C l4lb/c variants
+
+.PHONY: clean
+clean: ## 生成した配布物とBPF中間生成物を削除する
+	rm -rf dist
+	$(MAKE) --no-print-directory -C l4lb/c clean
+
+DEVCONTAINER ?= $(shell command -v devcontainer 2>/dev/null || printf '%s' "$$HOME/.devcontainers/bin/devcontainer")
 
 .PHONY: devcontainer-up
-devcontainer-up: ## Create or start the devcontainer.
-	$(DEVCONTAINER) up --workspace-folder "$(WORKSPACE)"
-
-.PHONY: devcontainer-rebuild
-devcontainer-rebuild: ## Recreate the devcontainer from scratch.
-	$(DEVCONTAINER) up --workspace-folder "$(WORKSPACE)" --remove-existing-container
+devcontainer-up: ## devcontainerを起動する
+	$(DEVCONTAINER) up --workspace-folder "$(CURDIR)"
 
 .PHONY: devcontainer-shell
-devcontainer-shell: ## Open bash inside the running devcontainer.
-	$(DEVCONTAINER) exec --workspace-folder "$(WORKSPACE)" bash
-
-.PHONY: devcontainer-ps
-devcontainer-ps: ## Show the devcontainer Docker container for this workspace.
-	@docker ps -a --filter "label=$(DEVCONTAINER_LABEL)" --format 'table {{.ID}}\t{{.Status}}\t{{.Names}}\t{{.Image}}'
-
-.PHONY: devcontainer-stop
-devcontainer-stop: ## Stop the devcontainer for this workspace.
-	@ids="$$(docker ps -q --filter "label=$(DEVCONTAINER_LABEL)")"; \
-	if [ -n "$$ids" ]; then docker stop $$ids; else echo "No running devcontainer for $(WORKSPACE)"; fi
-
-.PHONY: devcontainer-rm
-devcontainer-rm: ## Remove the devcontainer for this workspace.
-	@ids="$$(docker ps -aq --filter "label=$(DEVCONTAINER_LABEL)")"; \
-	if [ -n "$$ids" ]; then docker rm -f $$ids; else echo "No devcontainer for $(WORKSPACE)"; fi
-
-.PHONY: dc-up dc-rebuild dc-shell dc-ps dc-stop dc-rm
-dc-up: devcontainer-up
-dc-rebuild: devcontainer-rebuild
-dc-shell: devcontainer-shell
-dc-ps: devcontainer-ps
-dc-stop: devcontainer-stop
-dc-rm: devcontainer-rm
+devcontainer-shell: ## devcontainer内のshellを開く
+	$(DEVCONTAINER) exec --workspace-folder "$(CURDIR)" bash

@@ -18,7 +18,8 @@ import (
 	"github.com/yzp0n/ncdn/l4lb/l4lbdrv"
 )
 
-var lbBin = flag.String("lbBin", "c/lb.o", "Path to XDP lb binary")
+var lbBin = flag.String("lbBin", "", "Path to XDP lb binary; overrides -variant")
+var variant = flag.String("variant", "full", "XDP variant: full, no-stats, inline-dest, pow2-dests, keep-padding, fast-combined, l2-dsr, or minimal")
 var xdpcapHookPath = flag.String("xdpcapHookPath", "/sys/fs/bpf/xdpcap_hook", "Path to XDPCap hook")
 var xdpif = flag.String("interface", "net0", "Interface to attach lb prog to")
 var xdpMode = flag.String("xdpMode", "auto", "XDP attach mode: auto, generic, or driver")
@@ -66,6 +67,17 @@ func parseDest(deststr string) ([]l4lbdrv.DestinationEntry, error) {
 
 func main() {
 	flag.Parse()
+	validVariants := map[string]bool{
+		"full": true, "no-stats": true, "inline-dest": true,
+		"pow2-dests": true, "keep-padding": true, "fast-combined": true,
+		"l2-dsr": true, "minimal": true,
+	}
+	if !validVariants[*variant] {
+		log.Fatalf("Invalid variant: %s", *variant)
+	}
+	if *lbBin == "" {
+		*lbBin = fmt.Sprintf("c/lb-%s.o", *variant)
+	}
 	if *underlayMTU > 65535 {
 		log.Fatalf("Invalid underlay MTU: %d", *underlayMTU)
 	}
@@ -103,6 +115,7 @@ func main() {
 		VIP6:           netip.MustParseAddr(*vip6),
 		Dests:          dests,
 	}
+	slog.Info("Selected L4LB variant", "variant", *variant, "object", *lbBin)
 	lb, err := l4lbdrv.New(cfg)
 	if err != nil {
 		log.Panicf("Failed to create l4lb instance: %v", err)

@@ -6,7 +6,7 @@ export BIN_DIR=/tmp/ncdn-bin
 mkdir -p ${BIN_DIR}
 
 set -x
-(cd ${SRC_DIR}/l4lb/c && make)
+(cd ${SRC_DIR}/l4lb/c && make L4LB_VARIANT=full)
 set +x
 
 cd ${SRC_DIR}/l4lb

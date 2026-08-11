@@ -22,6 +22,14 @@ void* memcpy(void*, const void*, unsigned long);
 
 #define DEBUG_LB_MAIN 0
 
+#if L4LB_NO_STATS
+#define COUNT(c, field) do { } while (0)
+#define COUNT_ADD(c, field, value) do { } while (0)
+#else
+#define COUNT(c, field) (++(c)->field)
+#define COUNT_ADD(c, field, value) ((c)->field += (value))
+#endif
+
 #define ICMPV4_DEST_UNREACHABLE 3
 #define ICMPV4_FRAGMENTATION_NEEDED 4
 #define ICMPV4_TIME_EXCEEDED 11
@@ -88,6 +96,23 @@ struct {
   __type(value, struct lb_config);
 } lb_config_map SEC(".maps");
 
+#define INLINE_DESTINATIONS_SIZE 2
+
+// inline_lb_config is an experimental two-backend representation. It trades
+// backend-count flexibility for one fewer map lookup in the forwarding path.
+struct inline_lb_config {
+  struct lb_config base;
+  uint8_t dest_ip6_addresses[INLINE_DESTINATIONS_SIZE * 16];
+  uint8_t dest_mac_addresses[INLINE_DESTINATIONS_SIZE * ETH_ALEN];
+};
+
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, uint32_t);
+  __type(value, struct inline_lb_config);
+} inline_lb_config_map SEC(".maps");
+
 // destination_entry carries the outer tunnel addresses and Ethernet address
 // needed to send an encapsulated packet to a cache node.
 struct destination_entry {
@@ -143,6 +168,17 @@ struct tcp_ports {
   uint16_t dest;
 } PACKED;
 
+static __always_inline uint32_t select_destination(uint32_t key,
+                                                    uint32_t num_dests) {
+#if L4LB_POW2_DESTS
+  if ((num_dests & (num_dests - 1)) == 0) {
+    return (key & (num_dests - 1)) + 1;
+  }
+#endif
+  return (key % num_dests) + 1;
+}
+
+#if !L4LB_MINIMAL && !L4LB_L2_DSR
 static __always_inline uint16_t fold_checksum(uint32_t sum) {
   sum = (sum & 0xffff) + (sum >> 16);
   sum = (sum & 0xffff) + (sum >> 16);
@@ -170,7 +206,7 @@ static __always_inline int send_icmpv4_frag_needed(
   if (bpf_xdp_adjust_head(ctx,
                           -(int)(sizeof(struct iphdr) +
                                  sizeof(struct icmpv4_frag_needed)))) {
-    ++c->failed_adjust_head_total;
+    COUNT(c, failed_adjust_head_total);
     return XDP_DROP;
   }
 
@@ -182,7 +218,7 @@ static __always_inline int send_icmpv4_frag_needed(
   if (bpf_xdp_adjust_tail(ctx,
                           -(int)((data_end - data) -
                                  ICMPV4_REPLY_FRAME_LEN))) {
-    ++c->failed_adjust_tail_total;
+    COUNT(c, failed_adjust_tail_total);
     return XDP_DROP;
   }
 
@@ -225,7 +261,7 @@ static __always_inline int send_icmpv4_frag_needed(
                                     ICMPV4_MESSAGE_LEN, 0);
   icmp->checksum = fold_checksum(icmp_sum);
 
-  ++c->icmpv4_frag_needed_total;
+  COUNT(c, icmpv4_frag_needed_total);
   return XDP_TX;
 }
 
@@ -250,7 +286,7 @@ static __always_inline int send_icmpv6_packet_too_big(
   if (bpf_xdp_adjust_head(ctx,
                           -(int)(sizeof(struct ipv6hdr) +
                                  sizeof(struct icmpv6_packet_too_big)))) {
-    ++c->failed_adjust_head_total;
+    COUNT(c, failed_adjust_head_total);
     return XDP_DROP;
   }
 
@@ -262,7 +298,7 @@ static __always_inline int send_icmpv6_packet_too_big(
   if (bpf_xdp_adjust_tail(ctx,
                           -(int)((data_end - data) -
                                  ICMPV6_REPLY_FRAME_LEN))) {
-    ++c->failed_adjust_tail_total;
+    COUNT(c, failed_adjust_tail_total);
     return XDP_DROP;
   }
 
@@ -320,29 +356,149 @@ static __always_inline int send_icmpv6_packet_too_big(
                            ICMPV6_MESSAGE_LEN - 1024, icmp_sum);
   icmp->checksum = fold_checksum(icmp_sum);
 
-  ++c->icmpv6_packet_too_big_total;
+  COUNT(c, icmpv6_packet_too_big_total);
   return XDP_TX;
 }
+#endif
 
+#if L4LB_MINIMAL
+SEC("xdp")
+int lb_main(struct xdp_md* ctx) {
+  void* data = (void*)(uint64_t)ctx->data;
+  void* data_end = (void*)(uint64_t)ctx->data_end;
+  const uint32_t map_key_zero = 0;
+  struct lb_config* config = bpf_map_lookup_elem(&lb_config_map, &map_key_zero);
+  if (!config || data + sizeof(struct ethhdr) > data_end) {
+    EXIT(XDP_PASS);
+  }
+
+  struct ethhdr* eth = data;
+  uint32_t key;
+  uint16_t inner_len;
+  int ip_version;
+
+  if (eth->h_proto == htons(ETH_P_IP)) {
+    if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
+            sizeof(struct tcphdr) > data_end) {
+      EXIT(XDP_PASS);
+    }
+    struct iphdr* ip4 = (void*)(eth + 1);
+    if (ip4->version != 4 || ip4->daddr != config->vip4_address) {
+      EXIT(XDP_PASS);
+    }
+    if (ip4->ihl != 5 || ip4->protocol != IPPROTO_TCP) {
+      EXIT(XDP_DROP);
+    }
+    struct tcphdr* tcp = (void*)(ip4 + 1);
+    key = ip4->saddr + tcp->source;
+    inner_len = ntohs(ip4->tot_len);
+    ip_version = 4;
+  } else if (eth->h_proto == htons(ETH_P_IPV6)) {
+    if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
+            sizeof(struct tcphdr) > data_end) {
+      EXIT(XDP_PASS);
+    }
+    struct ipv6hdr* ip6 = (void*)(eth + 1);
+    uint32_t* vip6 = (uint32_t*)config->vip6_address;
+    if (ip6->version != 6 ||
+        ip6->daddr.s6_addr32[0] != vip6[0] ||
+        ip6->daddr.s6_addr32[1] != vip6[1] ||
+        ip6->daddr.s6_addr32[2] != vip6[2] ||
+        ip6->daddr.s6_addr32[3] != vip6[3]) {
+      EXIT(XDP_PASS);
+    }
+    if (ip6->nexthdr != IPPROTO_TCP) {
+      EXIT(XDP_DROP);
+    }
+    struct tcphdr* tcp = (void*)(ip6 + 1);
+    key = ip6->saddr.s6_addr32[0] ^ ip6->saddr.s6_addr32[1] ^
+          ip6->saddr.s6_addr32[2] ^ ip6->saddr.s6_addr32[3] ^ tcp->source;
+    inner_len = sizeof(struct ipv6hdr) + ntohs(ip6->payload_len);
+    ip_version = 6;
+  } else {
+    EXIT(XDP_PASS);
+  }
+
+  if (data + sizeof(struct ethhdr) + inner_len > data_end ||
+      inner_len > config->inner_mtu || config->num_dests == 0) {
+    EXIT(XDP_DROP);
+  }
+
+  uint32_t dest_idx = select_destination(key, config->num_dests);
+  struct destination_entry* dest =
+      bpf_map_lookup_elem(&destinations_map, &dest_idx);
+  if (!dest) {
+    EXIT(XDP_DROP);
+  }
+#if !L4LB_KEEP_PADDING
+  ssize_t padding = (data_end - data) - (sizeof(struct ethhdr) + inner_len);
+#endif
+
+  if (bpf_xdp_adjust_head(ctx, -(int)sizeof(struct ipv6hdr))) {
+    EXIT(XDP_DROP);
+  }
+  if (ctx->data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) >
+      ctx->data_end) {
+    EXIT(XDP_DROP);
+  }
+
+  eth = (void*)(uint64_t)ctx->data;
+  eth->h_proto = htons(ETH_P_IPV6);
+  memcpy(eth->h_source, config->src_mac_address, ETH_ALEN);
+  memcpy(eth->h_dest, dest->mac_address, ETH_ALEN);
+
+  struct ipv6hdr* outer = (void*)(eth + 1);
+  outer->version = 6;
+  outer->priority = 0;
+  outer->flow_lbl[0] = 0;
+  outer->flow_lbl[1] = 0;
+  outer->flow_lbl[2] = 0;
+  outer->payload_len = htons(inner_len);
+  outer->nexthdr = ip_version == 4 ? IPPROTO_IPIP : IPPROTO_IPV6;
+  outer->hop_limit = 64;
+  memcpy(&outer->saddr, config->src_ip6_address, 16);
+  memcpy(&outer->daddr, dest->ip6_address, 16);
+
+#if !L4LB_KEEP_PADDING
+  if (padding > 0 && bpf_xdp_adjust_tail(ctx, -padding)) {
+    EXIT(XDP_DROP);
+  }
+#endif
+  EXIT(XDP_TX);
+}
+#else
 SEC("xdp")
 int lb_main(struct xdp_md* ctx) {
   void* data = (void*)(uint64_t)ctx->data;
   void* data_end = (void*)(uint64_t)ctx->data_end;
 
   const uint32_t map_key_zero = 0;
+#if L4LB_NO_STATS
+  struct stat_counters* c = 0;
+#else
   struct stat_counters* c =
       bpf_map_lookup_elem(&stat_counters_map, &map_key_zero);
   if (!c) {
     EXIT(XDP_PASS);
   }
+#endif
 
+#if L4LB_INLINE_DEST
+  struct inline_lb_config* inline_config =
+      bpf_map_lookup_elem(&inline_lb_config_map, &map_key_zero);
+  if (!inline_config) {
+    EXIT(XDP_PASS);
+  }
+  struct lb_config* config = &inline_config->base;
+#else
   struct lb_config* config = bpf_map_lookup_elem(&lb_config_map, &map_key_zero);
+#endif
   if (!config) {
     EXIT(XDP_PASS);
   }
 
   if (data + sizeof(struct ethhdr) > data_end) {
-    ++c->too_short_packet_total;
+    COUNT(c, too_short_packet_total);
     EXIT(XDP_PASS);
   }
 
@@ -355,28 +511,28 @@ int lb_main(struct xdp_md* ctx) {
 
   if (eth->h_proto == htons(ETH_P_IP)) {
     if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) > data_end) {
-      ++c->too_short_packet_total;
+      COUNT(c, too_short_packet_total);
       EXIT(XDP_PASS);
     }
 
     struct iphdr* ip4 = (struct iphdr*)(eth + 1);
     if (ip4->version != 4) {
-      ++c->unsupported_network_packet_total;
+      COUNT(c, unsupported_network_packet_total);
       EXIT(XDP_PASS);
     }
     if (ip4->daddr != config->vip4_address) {
-      ++c->no_vip_match_total;
+      COUNT(c, no_vip_match_total);
       EXIT(XDP_PASS);
     }
     if (ip4->ihl != 5) {
-      ++c->ip_option_packet_total;
+      COUNT(c, ip_option_packet_total);
       EXIT(XDP_DROP);
     }
     if (ip4->protocol == IPPROTO_TCP) {
       if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
               sizeof(struct tcphdr) >
           data_end) {
-        ++c->too_short_packet_total;
+        COUNT(c, too_short_packet_total);
         EXIT(XDP_DROP);
       }
 
@@ -390,7 +546,7 @@ int lb_main(struct xdp_md* ctx) {
               sizeof(struct icmp_error_header) + sizeof(struct iphdr) +
               sizeof(struct tcp_ports) >
           data_end) {
-        ++c->too_short_packet_total;
+        COUNT(c, too_short_packet_total);
         EXIT(XDP_DROP);
       }
 
@@ -398,7 +554,7 @@ int lb_main(struct xdp_md* ctx) {
       if (icmp->type != ICMPV4_DEST_UNREACHABLE &&
           icmp->type != ICMPV4_TIME_EXCEEDED &&
           icmp->type != ICMPV4_PARAMETER_PROBLEM) {
-        ++c->non_supported_proto_packet_total;
+        COUNT(c, non_supported_proto_packet_total);
         EXIT(XDP_DROP);
       }
 
@@ -407,7 +563,7 @@ int lb_main(struct xdp_md* ctx) {
           quoted_ip4->protocol != IPPROTO_TCP ||
           (quoted_ip4->frag_off & htons(0x1fff)) != 0 ||
           quoted_ip4->saddr != config->vip4_address) {
-        ++c->invalid_icmp_error_total;
+        COUNT(c, invalid_icmp_error_total);
         EXIT(XDP_DROP);
       }
       struct tcp_ports* quoted_tcp = (void*)(quoted_ip4 + 1);
@@ -419,22 +575,22 @@ int lb_main(struct xdp_md* ctx) {
       debugk("incoming ICMPv4 error: quoted_ip=%pI4 port=%u",
              &quoted_ip4->daddr, ntohs(quoted_tcp->dest));
     } else {
-      ++c->non_supported_proto_packet_total;
+      COUNT(c, non_supported_proto_packet_total);
       EXIT(XDP_DROP);
     }
 
     inner_len = ntohs(ip4->tot_len);
     ip_version = 4;
-    ++c->ipv4_packet_total;
+    COUNT(c, ipv4_packet_total);
   } else if (eth->h_proto == htons(ETH_P_IPV6)) {
     if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) > data_end) {
-      ++c->too_short_packet_total;
+      COUNT(c, too_short_packet_total);
       EXIT(XDP_PASS);
     }
 
     struct ipv6hdr* ip6 = (struct ipv6hdr*)(eth + 1);
     if (ip6->version != 6) {
-      ++c->unsupported_network_packet_total;
+      COUNT(c, unsupported_network_packet_total);
       EXIT(XDP_PASS);
     }
     uint32_t* vip6 = (uint32_t*)config->vip6_address;
@@ -442,7 +598,7 @@ int lb_main(struct xdp_md* ctx) {
         ip6->daddr.s6_addr32[1] != vip6[1] ||
         ip6->daddr.s6_addr32[2] != vip6[2] ||
         ip6->daddr.s6_addr32[3] != vip6[3]) {
-      ++c->no_vip_match_total;
+      COUNT(c, no_vip_match_total);
       EXIT(XDP_PASS);
     }
     // Extension headers are deliberately not handled in the first IPv6
@@ -451,7 +607,7 @@ int lb_main(struct xdp_md* ctx) {
       if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
               sizeof(struct tcphdr) >
           data_end) {
-        ++c->too_short_packet_total;
+        COUNT(c, too_short_packet_total);
         EXIT(XDP_DROP);
       }
 
@@ -465,7 +621,7 @@ int lb_main(struct xdp_md* ctx) {
               sizeof(struct icmp_error_header) + sizeof(struct ipv6hdr) +
               sizeof(struct tcp_ports) >
           data_end) {
-        ++c->too_short_packet_total;
+        COUNT(c, too_short_packet_total);
         EXIT(XDP_DROP);
       }
 
@@ -474,7 +630,7 @@ int lb_main(struct xdp_md* ctx) {
           icmp->type != ICMPV6_PACKET_TOO_BIG &&
           icmp->type != ICMPV6_TIME_EXCEEDED &&
           icmp->type != ICMPV6_PARAMETER_PROBLEM) {
-        ++c->non_supported_proto_packet_total;
+        COUNT(c, non_supported_proto_packet_total);
         EXIT(XDP_DROP);
       }
 
@@ -485,7 +641,7 @@ int lb_main(struct xdp_md* ctx) {
           quoted_ip6->saddr.s6_addr32[1] != vip6_quoted[1] ||
           quoted_ip6->saddr.s6_addr32[2] != vip6_quoted[2] ||
           quoted_ip6->saddr.s6_addr32[3] != vip6_quoted[3]) {
-        ++c->invalid_icmp_error_total;
+        COUNT(c, invalid_icmp_error_total);
         EXIT(XDP_DROP);
       }
       struct tcp_ports* quoted_tcp = (void*)(quoted_ip6 + 1);
@@ -499,29 +655,30 @@ int lb_main(struct xdp_md* ctx) {
       icmp_error_version = 6;
       debugk("incoming ICMPv6 error: port=%u", ntohs(quoted_tcp->dest));
     } else {
-      ++c->non_supported_proto_packet_total;
+      COUNT(c, non_supported_proto_packet_total);
       EXIT(XDP_DROP);
     }
 
     inner_len = sizeof(struct ipv6hdr) + ntohs(ip6->payload_len);
     ip_version = 6;
-    ++c->ipv6_packet_total;
+    COUNT(c, ipv6_packet_total);
   } else {
-    ++c->unsupported_network_packet_total;
+    COUNT(c, unsupported_network_packet_total);
     EXIT(XDP_PASS);
   }
 
   if (inner_len < minimum_inner_len ||
       data + sizeof(struct ethhdr) + inner_len > data_end) {
-    ++c->too_short_packet_total;
+    COUNT(c, too_short_packet_total);
     EXIT(XDP_DROP);
   }
 
-  ++c->rx_packet_total;
-  c->rx_total_size += data_end - data;
+  COUNT(c, rx_packet_total);
+  COUNT_ADD(c, rx_total_size, data_end - data);
 
+#if !L4LB_L2_DSR
   if (inner_len > config->inner_mtu) {
-    ++c->mtu_exceeded_packet_total;
+    COUNT(c, mtu_exceeded_packet_total);
     // An ICMP error must never trigger another ICMP error.
     if (icmp_error_version != 0) {
       EXIT(XDP_DROP);
@@ -531,26 +688,54 @@ int lb_main(struct xdp_md* ctx) {
     }
     EXIT(send_icmpv6_packet_too_big(ctx, c, config->inner_mtu));
   }
+#endif
 
   if (config->num_dests == 0) {
-    ++c->no_healthy_destination_total;
+    COUNT(c, no_healthy_destination_total);
     EXIT(XDP_DROP);
   }
 
-  uint32_t dest_idx = (key % config->num_dests) + 1;
+  uint32_t dest_idx = select_destination(key, config->num_dests);
+#if L4LB_INLINE_DEST
+  if (dest_idx > INLINE_DESTINATIONS_SIZE) {
+    EXIT(XDP_DROP);
+  }
+  uint8_t* dest_ip6 =
+      &inline_config->dest_ip6_addresses[(dest_idx - 1) * 16];
+  uint8_t* dest_mac =
+      &inline_config->dest_mac_addresses[(dest_idx - 1) * ETH_ALEN];
+#else
   struct destination_entry* dest =
       bpf_map_lookup_elem(&destinations_map, &dest_idx);
   if (!dest) {
     bpf_printk("ASSERTION FAILURE: no dest entry for %d", dest_idx);
     EXIT(XDP_DROP);
   }
+  uint8_t* dest_ip6 = dest->ip6_address;
+  uint8_t* dest_mac = dest->mac_address;
+#endif
 
+#if L4LB_L2_DSR
+  // The cache is directly reachable on the same Ethernet segment. Preserve
+  // the original IP packet and select a cache using only the destination MAC.
+  memcpy(eth->h_source, config->src_mac_address, ETH_ALEN);
+  memcpy(eth->h_dest, dest_mac, ETH_ALEN);
+  if (icmp_error_version == 4) {
+    COUNT(c, icmpv4_error_forwarded_total);
+  } else if (icmp_error_version == 6) {
+    COUNT(c, icmpv6_error_forwarded_total);
+  }
+  EXIT(XDP_TX);
+#endif
+
+#if !L4LB_KEEP_PADDING
   ssize_t padding = (data_end - data) - (sizeof(struct ethhdr) + inner_len);
+#endif
 
   // The PoP underlay is IPv6 for both client address families. The original
   // IPv4 or IPv6 packet remains unchanged as the inner packet.
   if (bpf_xdp_adjust_head(ctx, -(int)sizeof(struct ipv6hdr))) {
-    ++c->failed_adjust_head_total;
+    COUNT(c, failed_adjust_head_total);
     EXIT(XDP_DROP);
   }
 
@@ -563,7 +748,7 @@ int lb_main(struct xdp_md* ctx) {
   eth->h_proto = htons(ETH_P_IPV6);
   memcpy(eth->h_source, config->src_mac_address,
          sizeof(config->src_mac_address));
-  memcpy(eth->h_dest, dest->mac_address, sizeof(dest->mac_address));
+  memcpy(eth->h_dest, dest_mac, ETH_ALEN);
 
   struct ipv6hdr* ip6_outer = (void*)(eth + 1);
   ip6_outer->version = 6;
@@ -576,23 +761,26 @@ int lb_main(struct xdp_md* ctx) {
       ip_version == 4 ? IPPROTO_IPIP : IPPROTO_IPV6;
   ip6_outer->hop_limit = 64;
   memcpy(&ip6_outer->saddr, config->src_ip6_address, 16);
-  memcpy(&ip6_outer->daddr, dest->ip6_address, 16);
+  memcpy(&ip6_outer->daddr, dest_ip6, 16);
 
+#if !L4LB_KEEP_PADDING
   if (padding > 0) {
     if (bpf_xdp_adjust_tail(ctx, -padding)) {
-      ++c->failed_adjust_tail_total;
+      COUNT(c, failed_adjust_tail_total);
       EXIT(XDP_DROP);
     }
   }
+#endif
 
   if (icmp_error_version == 4) {
-    ++c->icmpv4_error_forwarded_total;
+    COUNT(c, icmpv4_error_forwarded_total);
   } else if (icmp_error_version == 6) {
-    ++c->icmpv6_error_forwarded_total;
+    COUNT(c, icmpv6_error_forwarded_total);
   }
 
   EXIT(XDP_TX);
 }
+#endif
 
 #undef debugk
 
