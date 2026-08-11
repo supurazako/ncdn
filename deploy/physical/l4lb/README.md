@@ -2,6 +2,15 @@
 
 このdirectoryにはL4LBのLinux amd64 binaryと、XDP program `lb-full.o`が配置される。
 
+最初に読み取り専用の調査scriptを実行する。引数を省略するとdefault routeのNICを選ぶ。
+
+```sh
+./inspect.sh
+./inspect.sh enp1s0
+```
+
+NIC、IP address、MAC address、MTU、driver、route、neighbor、XDP実行環境と、起動設定の雛形が表示される。このscriptはIP addressやrouteを変更せず、XDPもattachしない。
+
 起動例：
 
 ```sh
