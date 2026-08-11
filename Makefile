@@ -20,9 +20,11 @@ deploy: deploy-l4lb deploy-l7lb deploy-origin ## Linux amd64向けの全roleを�
 deploy-l4lb: ## L4LB本体とfull版XDP objectをビルドする
 	@mkdir -p "$(DIST_ROOT)/l4lb"
 	$(GO_BUILD) -o "$(DIST_ROOT)/l4lb/l4lb" ./l4lb/cmd
-	$(MAKE) --no-print-directory -C l4lb/c L4LB_VARIANT=full NCDN_STRIP=1 lb.o
+	$(MAKE) --no-print-directory -C l4lb/c L4LB_VARIANT=full NCDN_STRIP=0 lb.o
 	cp l4lb/c/lb.o "$(DIST_ROOT)/l4lb/lb-full.o"
 	cp deploy/physical/l4lb/README.md "$(DIST_ROOT)/l4lb/README.md"
+	cp deploy/physical/l4lb/inspect.sh "$(DIST_ROOT)/l4lb/inspect.sh"
+	chmod +x "$(DIST_ROOT)/l4lb/inspect.sh"
 
 .PHONY: deploy-l7lb
 deploy-l7lb: ## L7LB兼cache serverをビルドする

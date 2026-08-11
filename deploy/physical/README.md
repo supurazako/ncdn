@@ -13,6 +13,7 @@ dist/linux-amd64/
 ├── l4lb/
 │   ├── l4lb
 │   ├── lb-full.o
+│   ├── inspect.sh
 │   └── README.md
 ├── l7lb/
 │   ├── l7lb
