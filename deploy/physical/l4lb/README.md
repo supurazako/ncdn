@@ -2,6 +2,8 @@
 
 このdirectoryにはL4LBのLinux amd64 binaryと、XDP program `lb-full.o`が配置される。
 
+`lb-full.o`のDWARF情報はL4LB driverがmap構造を読み取るために必要なので、XDP objectだけはstripしていない。
+
 最初に読み取り専用の調査scriptを実行する。引数を省略するとdefault routeのNICを選ぶ。
 
 ```sh
