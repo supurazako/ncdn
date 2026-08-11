@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 2s
+
+scrape_configs:
+  - job_name: moq-relay
+    static_configs:
+      - targets:
+          - relay:9090
+          - edge-c1:9090
+          - origin-relay:9090
+
+  - job_name: moq-router
+    static_configs:
+      - targets:
+          - router:8080

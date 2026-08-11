@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoQ CDN Visualizer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">NCDN · MEDIA OVER QUIC</p>
+      <h1>MoQ CDN Visualizer</h1>
+    </div>
+    <div id="live-state" class="live-state"><span></span> CONNECTING</div>
+  </header>
+
+  <main>
+    <section class="player-panel panel">
+      <div class="panel-heading">
+        <div>
+          <p class="label">DIRECT MOQ LIVE TRACK</p>
+          <h2>demo.hang</h2>
+        </div>
+        <div id="player-state" class="pill">waiting</div>
+      </div>
+      <div class="video-frame">
+        <moq-watch-ui id="moq-player-ui">
+          <moq-watch
+            id="moq-player"
+            name="demo.hang"
+            muted
+            visible="always"
+            latency="real-time">
+            <canvas></canvas>
+          </moq-watch>
+        </moq-watch-ui>
+        <div id="video-placeholder" class="video-placeholder">
+          <div class="spinner"></div>
+          <p>Connecting directly to MoQ...</p>
+          <small id="transport-endpoint">Relay endpointを決定中...</small>
+        </div>
+      </div>
+      <div class="transport-strip">
+        <span>MoQ → WebTransport → WebCodecs</span>
+        <span>H.264 · 960×540 · 30fps · GOP 2s</span>
+        <span id="last-frame">Waiting for frame</span>
+      </div>
+    </section>
+
+    <section class="topology-panel panel">
+      <div class="panel-heading">
+        <div>
+          <p class="label">LIVE TOPOLOGY</p>
+          <h2>Delivery path</h2>
+        </div>
+        <span>moq-dev/moq</span>
+      </div>
+
+      <div class="topology">
+        <article class="node" id="publisher-node">
+          <div class="node-icon publisher-icon">P</div>
+          <div><strong>Video Publisher</strong><small>FFmpeg → SRT → moq-cli</small></div>
+          <i></i>
+        </article>
+
+        <div class="link" id="publish-link">
+          <span class="flow-dot"></span>
+          <b>MOQT</b>
+          <small>publish demo.hang</small>
+        </div>
+
+        <article class="node relay" id="origin-node">
+          <div class="node-icon relay-icon">R</div>
+          <div><strong>MoQ Relay</strong><small>30s Group history cache</small></div>
+          <i></i>
+        </article>
+
+        <div class="link" id="subscribe-link">
+          <span class="flow-dot second"></span>
+          <b>WEBTRANSPORT / QUIC</b>
+          <small>direct MoQ SUBSCRIBE</small>
+        </div>
+
+        <article class="node" id="subscriber-node">
+          <div class="node-icon subscriber-icon">S</div>
+          <div><strong>Browser Subscriber</strong><small id="subscriber-detail">WebCodecs waiting</small></div>
+          <i></i>
+        </article>
+      </div>
+
+      <div class="metrics-grid">
+        <article><span>Delivery</span><strong>SUB</strong></article>
+        <article><span>Transport</span><strong>QUIC</strong></article>
+        <article><span>Decode</span><strong>WebCodecs</strong></article>
+        <article><span>Target</span><strong>real-time</strong></article>
+      </div>
+    </section>
+
+    <section class="events-panel panel">
+      <div class="panel-heading">
+        <div>
+          <p class="label">DIRECT SESSION</p>
+          <h2>Browser observation</h2>
+        </div>
+        <button id="clear-events" type="button">Clear</button>
+      </div>
+      <ol id="events"></ol>
+    </section>
+  </main>
+
+  <script type="module" src="bootstrap.js"></script>
+</body>
+</html>
