@@ -7,8 +7,8 @@ bind = "[::]:4443"
 [web.http]
 listen = "[::]:4443"
 
-[auth]
-public = ""
+[auth.public]
+subscribe = ""
 
 [cache]
 capacity = "128MB"

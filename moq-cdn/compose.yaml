@@ -1,67 +1,88 @@
 name: ncdn-moq
 
 services:
-  relay:
+  origin-relay:
     image: moqdev/moq-relay:0.14.9
     command: /config/relay.toml
+    environment:
+      MOQ_CLUSTER_ID: "90"
+      MOQ_STATS_NODE: origin
+      MOQ_SERVER_TLS_GENERATE: origin-relay
+    volumes:
+      - ./moqdev/relay.toml:/config/relay.toml:ro
+
+  edge-c0:
+    image: moqdev/moq-relay:0.14.9
+    command: /config/relay.toml
+    environment:
+      MOQ_CLUSTER_CONNECT: http://origin-relay:4443
+      MOQ_CLUSTER_ID: "100"
+      MOQ_STATS_NODE: edge-c0
+      MOQ_SERVER_TLS_GENERATE: localhost
     ports:
       - "4443:4443/udp"
       - "4443:4443/tcp"
     volumes:
-      - ./moqdev/relay.toml:/config/relay.toml:ro
+      - ./moqdev/edge-relay.toml:/config/relay.toml:ro
+    depends_on:
+      - origin-relay
 
-  publisher:
+  edge-c1:
+    image: moqdev/moq-relay:0.14.9
+    command: /config/relay.toml
+    environment:
+      MOQ_CLUSTER_CONNECT: http://origin-relay:4443
+      MOQ_CLUSTER_ID: "101"
+      MOQ_STATS_NODE: edge-c1
+      MOQ_SERVER_TLS_GENERATE: localhost
+    ports:
+      - "4444:4443/udp"
+      - "4444:4443/tcp"
+    volumes:
+      - ./moqdev/edge-relay.toml:/config/relay.toml:ro
+    depends_on:
+      - origin-relay
+
+  publisher-motion:
     image: moqdev/moq-cli:0.9.9
-    command:
-      - --client-connect
-      - http://relay:4443
-      - --broadcast
-      - demo.hang
-      - import
-      - srt
-      - --listen
-      - "[::]:9000"
+    command: ["--client-connect", "http://origin-relay:4443", "--broadcast", "motion.hang", "import", "srt", "--listen", "[::]:9000"]
     depends_on:
-      - relay
+      - origin-relay
     restart: on-failure
 
-  video-source:
+  source-motion:
     image: jrottenberg/ffmpeg:7.1-alpine
-    command:
-      - -hide_banner
-      - -loglevel
-      - warning
-      - -re
-      - -f
-      - lavfi
-      - -i
-      - testsrc2=size=960x540:rate=30
-      - -an
-      - -c:v
-      - libx264
-      - -preset
-      - ultrafast
-      - -tune
-      - zerolatency
-      - -g
-      - "60"
-      - -keyint_min
-      - "60"
-      - -sc_threshold
-      - "0"
-      - -f
-      - mpegts
-      - srt://publisher:9000?mode=caller&streamid=demo
+    command: ["-hide_banner", "-loglevel", "warning", "-re", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=20", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-g", "40", "-keyint_min", "40", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-f", "mpegts", "srt://publisher-motion:9000?mode=caller&streamid=motion"]
     depends_on:
-      - publisher
+      - publisher-motion
     restart: on-failure
+
+  publisher-bars:
+    image: moqdev/moq-cli:0.9.9
+    command: ["--client-connect", "http://origin-relay:4443", "--broadcast", "bars.hang", "import", "srt", "--listen", "[::]:9001"]
+    depends_on:
+      - origin-relay
+    restart: on-failure
+
+  source-bars:
+    image: jrottenberg/ffmpeg:7.1-alpine
+    command: ["-hide_banner", "-loglevel", "warning", "-re", "-f", "lavfi", "-i", "smptebars=size=640x360:rate=20", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-g", "40", "-keyint_min", "40", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-f", "mpegts", "srt://publisher-bars:9001?mode=caller&streamid=bars"]
+    depends_on:
+      - publisher-bars
+    restart: on-failure
+
+  router:
+    build: ./router
+    environment:
+      EDGES: "edge-c0=${EDGE_C0_PUBLIC_URL:-http://localhost:4443},edge-c1=${EDGE_C1_PUBLIC_URL:-http://localhost:4444}"
+      CHANNELS: "motion=motion.hang,bars=bars.hang"
+      PUBLIC_MOQ_URL: ${MOQ_PUBLIC_URL:-http://localhost:4443}
 
   visualizer:
-    image: nginx:1.29-alpine
+    build: ./visualizer
     ports:
       - "3002:80"
     volumes:
-      - ./visualizer:/usr/share/nginx/html:ro
       - ./observability/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - relay
+      - router

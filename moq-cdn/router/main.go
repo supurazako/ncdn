@@ -22,8 +22,15 @@ type edge struct {
 	URL string `json:"url"`
 }
 
+type channel struct {
+	ID        string `json:"id"`
+	Broadcast string `json:"broadcast"`
+}
+
 type router struct {
 	edges      []edge
+	channels   []channel
+	channelSet map[string]struct{}
 	roundRobin atomic.Uint64
 	mu         sync.Mutex
 	selections map[string]map[string]uint64
@@ -34,6 +41,13 @@ type routeResponse struct {
 	Strategy  string `json:"strategy"`
 	Edge      string `json:"edge"`
 	URL       string `json:"url"`
+}
+
+type clientConfig struct {
+	MoQURL             string `json:"moq_url"`
+	CertificateSHA256  string `json:"certificate_sha256,omitempty"`
+	CacheRetentionSecs int    `json:"cache_retention_seconds"`
+	GroupDurationSecs  int    `json:"group_duration_seconds"`
 }
 
 type comparisonResult struct {
@@ -66,7 +80,7 @@ type loadComparisonResult struct {
 	NamespacesUsingSecondEdge int            `json:"namespaces_using_second_edge"`
 }
 
-func newRouter(edges []edge) (*router, error) {
+func newRouter(edges []edge, channels []channel) (*router, error) {
 	if len(edges) == 0 {
 		return nil, errors.New("at least one edge is required")
 	}
@@ -82,8 +96,29 @@ func newRouter(edges []edge) (*router, error) {
 		seen[candidate.ID] = struct{}{}
 	}
 
+	if len(channels) == 0 {
+		return nil, errors.New("at least one channel is required")
+	}
+	channelSet := make(map[string]struct{}, len(channels))
+	channelIDs := make(map[string]struct{}, len(channels))
+	for _, candidate := range channels {
+		if candidate.ID == "" || candidate.Broadcast == "" {
+			return nil, errors.New("channel ID and broadcast are required")
+		}
+		if _, ok := channelIDs[candidate.ID]; ok {
+			return nil, fmt.Errorf("duplicate channel ID %q", candidate.ID)
+		}
+		if _, ok := channelSet[candidate.Broadcast]; ok {
+			return nil, fmt.Errorf("duplicate channel broadcast %q", candidate.Broadcast)
+		}
+		channelIDs[candidate.ID] = struct{}{}
+		channelSet[candidate.Broadcast] = struct{}{}
+	}
+
 	return &router{
 		edges:      append([]edge(nil), edges...),
+		channels:   append([]channel(nil), channels...),
+		channelSet: channelSet,
 		selections: make(map[string]map[string]uint64),
 	}, nil
 }
@@ -139,6 +174,10 @@ func (r *router) routeHandler(w http.ResponseWriter, request *http.Request) {
 		http.Error(w, "namespace is required", http.StatusBadRequest)
 		return
 	}
+	if _, ok := r.channelSet[namespace]; !ok {
+		http.Error(w, "unknown namespace", http.StatusNotFound)
+		return
+	}
 	strategy := request.URL.Query().Get("strategy")
 	if strategy == "" {
 		strategy = "rendezvous"
@@ -157,6 +196,27 @@ func (r *router) routeHandler(w http.ResponseWriter, request *http.Request) {
 		Edge:      selected.ID,
 		URL:       selected.URL,
 	})
+}
+
+func (r *router) channelsHandler(w http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(r.channels)
+}
+
+func configHandler(config clientConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(config)
+	}
 }
 
 func (r *router) metricsHandler(w http.ResponseWriter, request *http.Request) {
@@ -423,17 +483,66 @@ func parseEdges(raw string) ([]edge, error) {
 	return edges, nil
 }
 
+func parseChannels(raw string) ([]channel, error) {
+	var channels []channel
+	for _, item := range strings.Split(raw, ",") {
+		id, broadcast, ok := strings.Cut(strings.TrimSpace(item), "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid channel %q; expected id=broadcast", item)
+		}
+		channels = append(channels, channel{
+			ID:        strings.TrimSpace(id),
+			Broadcast: strings.TrimSpace(broadcast),
+		})
+	}
+	return channels, nil
+}
+
+func parseCertificateSHA256(raw string) (string, error) {
+	fingerprint := strings.ToLower(strings.TrimSpace(raw))
+	if fingerprint == "" {
+		return "", nil
+	}
+	if len(fingerprint) != 64 {
+		return "", errors.New("certificate SHA-256 fingerprint must contain 64 hexadecimal characters")
+	}
+	for _, char := range fingerprint {
+		if !strings.ContainsRune("0123456789abcdef", char) {
+			return "", errors.New("certificate SHA-256 fingerprint must contain only hexadecimal characters")
+		}
+	}
+	return fingerprint, nil
+}
+
 func main() {
 	edges, err := parseEdges(envOrDefault("EDGES", "c0=https://127.0.0.1:4443,c1=https://127.0.0.1:4444"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	router, err := newRouter(edges)
+	fingerprint, err := parseCertificateSHA256(os.Getenv("PUBLIC_MOQ_CERTIFICATE_SHA256"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	channels, err := parseChannels(envOrDefault(
+		"CHANNELS",
+		"motion=motion.hang,bars=bars.hang",
+	))
+	if err != nil {
+		log.Fatal(err)
+	}
+	router, err := newRouter(edges, channels)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/channels", router.channelsHandler)
+	mux.HandleFunc("/config", configHandler(clientConfig{
+		MoQURL:             envOrDefault("PUBLIC_MOQ_URL", "http://localhost:4443"),
+		CertificateSHA256:  fingerprint,
+		CacheRetentionSecs: envIntOrDefault("CACHE_RETENTION_SECONDS", 30),
+		GroupDurationSecs:  envIntOrDefault("GROUP_DURATION_SECONDS", 2),
+	}))
 	mux.HandleFunc("/route", router.routeHandler)
 	mux.HandleFunc("/compare", router.compareHandler)
 	mux.HandleFunc("/metrics", router.metricsHandler)
@@ -456,4 +565,16 @@ func envOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envIntOrDefault(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		log.Fatalf("%s must be a positive integer", name)
+	}
+	return parsed
 }

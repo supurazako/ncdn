@@ -25,6 +25,7 @@ type Config struct {
 
 	VIP4               netip.Addr
 	VIP6               netip.Addr
+	UDPPort            uint16
 	Dests              DestinationEntries
 	SelectionAlgorithm SelectionAlgorithm
 }
@@ -228,6 +229,7 @@ func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
 		Vip6Address:        vip6,
 		SrcIp6Address:      dests[0].IPv6Addr.As16(),
 		SrcMacAddress:      [6]uint8(dests[0].HardwareAddr),
+		UdpDestPort:        lb.cfg.UDPPort,
 		NumDests:           uint32(len(dests) - 1),
 		InnerMtu:           innerMTU,
 		SelectionAlgorithm: lb.cfg.SelectionAlgorithm.bpfValue(),
@@ -242,6 +244,7 @@ func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
 			Vip6Address:        vip6,
 			SrcIp6Address:      dests[0].IPv6Addr.As16(),
 			SrcMacAddress:      [6]uint8(dests[0].HardwareAddr),
+			UdpDestPort:        lb.cfg.UDPPort,
 			NumDests:           uint32(min(len(dests)-1, inlineDestinationsSize)),
 			InnerMtu:           innerMTU,
 			SelectionAlgorithm: lb.cfg.SelectionAlgorithm.bpfValue(),
@@ -273,7 +276,7 @@ func (lb *L4LB) Close() error {
 }
 
 func (lb *L4LB) DumpCounters() error {
-	cnt, err := lb.bindings.ReadStatCountersAggregate()
+	cnt, err := lb.ReadCounters()
 	if err != nil {
 		return err
 	}
@@ -281,6 +284,11 @@ func (lb *L4LB) DumpCounters() error {
 	slog.Info(cnt.String())
 
 	return nil
+}
+
+// ReadCounters returns a point-in-time aggregate of all per-CPU XDP counters.
+func (lb *L4LB) ReadCounters() (*StatCounters, error) {
+	return lb.bindings.ReadStatCountersAggregate()
 }
 
 // `PrepSystemForXDP` configures RLIMIT_MEMLOCK to ensure enough room to

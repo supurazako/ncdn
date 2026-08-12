@@ -4,3 +4,5 @@ secrets/
 *.o
 *.ll
 /dist/
+/moq-cdn/visualizer/node_modules/
+/moq-cdn/visualizer/vendor/

@@ -34,6 +34,9 @@ var healthCheckFailures = flag.Int("healthCheckFailures", 3, "Consecutive health
 var healthCheckSuccesses = flag.Int("healthCheckSuccesses", 2, "Consecutive health check successes before restoring a cache destination")
 var healthCheckPort = flag.Uint("healthCheckPort", 8889, "Cache destination health check port")
 var selectionAlgorithm = flag.String("selectionAlgorithm", "modulo", "Backend selection algorithm: modulo, rendezvous, or maglev")
+var udpPort = flag.Uint("udpPort", 0, "UDP destination port to forward; 0 disables UDP")
+var metricsListenAddr = flag.String("metricsListenAddr", "", "Address for the read-only distribution API; empty disables it")
+var backendNames = flag.String("backendNames", "", "Comma separated display names for cache destinations")
 
 func parseDest(deststr string) ([]l4lbdrv.DestinationEntry, error) {
 	commas := strings.Split(deststr, ",")
@@ -94,6 +97,9 @@ func main() {
 	if *healthCheckPort > 65535 {
 		log.Fatalf("Invalid health check port: %d", *healthCheckPort)
 	}
+	if *udpPort > 65535 {
+		log.Fatalf("Invalid UDP port: %d", *udpPort)
+	}
 	if *healthCheckEnabled && *healthCheckFailures <= 0 {
 		log.Fatalf("Invalid health check failure threshold: %d", *healthCheckFailures)
 	}
@@ -118,17 +124,41 @@ func main() {
 		UnderlayMTU:        uint32(*underlayMTU),
 		VIP4:               netip.MustParseAddr(*vip4),
 		VIP6:               netip.MustParseAddr(*vip6),
+		UDPPort:            uint16(*udpPort),
 		Dests:              dests,
 		SelectionAlgorithm: algorithm,
 	}
 	slog.Info("Selected L4LB variant", "variant", *variant, "object", *lbBin,
-		"selectionAlgorithm", algorithm)
+		"selectionAlgorithm", algorithm, "udpPort", *udpPort)
 	lb, err := l4lbdrv.New(cfg)
 	if err != nil {
 		log.Panicf("Failed to create l4lb instance: %v", err)
 	}
 	slog.Info("L4LB started.")
 	defer lb.Close()
+	var metricsServer *http.Server
+	if *metricsListenAddr != "" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/distribution", distributionHandler(
+			lb,
+			dests,
+			parseBackendNames(*backendNames, len(dests)-1),
+			*vip4,
+			*vip6,
+			algorithm,
+		))
+		metricsServer = &http.Server{
+			Addr:              *metricsListenAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 2 * time.Second,
+		}
+		go func() {
+			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("Distribution API stopped", "err", err)
+			}
+		}()
+		slog.Info("Distribution API started", "address", *metricsListenAddr)
+	}
 	var checker *healthChecker
 	var healthCheckC <-chan time.Time
 	if *healthCheckEnabled {
@@ -183,4 +213,11 @@ func main() {
 		break
 	}
 	slog.Info("Shutting down.")
+	if metricsServer != nil {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := metricsServer.Shutdown(shutdownContext); err != nil {
+			slog.Error("Failed to stop distribution API", "err", err)
+		}
+	}
 }

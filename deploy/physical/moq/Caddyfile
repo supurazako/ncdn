@@ -1,0 +1,28 @@
+{$GUI_DOMAIN:moq.supurazako.com} {
+	root * /srv
+	encode zstd gzip
+
+	handle /api/config {
+		rewrite * /config
+		reverse_proxy router:8080
+	}
+
+	handle /api/channels {
+		rewrite * /channels
+		reverse_proxy router:8080
+	}
+
+	handle /api/distribution {
+		rewrite * /distribution
+		reverse_proxy {$L4LB_METRICS_URL:http://192.168.20.5:9100}
+	}
+
+	handle /api/* {
+		respond "not found" 404
+	}
+
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -12,8 +13,13 @@ var testEdges = []edge{
 	{ID: "c1", URL: "https://example.test:4444"},
 }
 
+var testChannels = []channel{
+	{ID: "demo", Broadcast: "/demo"},
+	{ID: "news", Broadcast: "/news"},
+}
+
 func TestRoundRobinAlternates(t *testing.T) {
-	router, err := newRouter(testEdges)
+	router, err := newRouter(testEdges, testChannels)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +56,7 @@ func TestRendezvousDistributesNamespaces(t *testing.T) {
 }
 
 func TestRouteHandler(t *testing.T) {
-	router, err := newRouter(testEdges)
+	router, err := newRouter(testEdges, testChannels)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +78,7 @@ func TestRouteHandler(t *testing.T) {
 }
 
 func TestRouteRequiresNamespace(t *testing.T) {
-	router, err := newRouter(testEdges)
+	router, err := newRouter(testEdges, testChannels)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +88,88 @@ func TestRouteRequiresNamespace(t *testing.T) {
 	router.routeHandler(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("got status %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRouteRejectsUnknownNamespace(t *testing.T) {
+	router, err := newRouter(testEdges, testChannels)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/route?namespace=/unknown", nil)
+	response := httptest.NewRecorder()
+	router.routeHandler(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestChannelsHandler(t *testing.T) {
+	router, err := newRouter(testEdges, testChannels)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/channels", nil)
+	response := httptest.NewRecorder()
+	router.channelsHandler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("got status %d: %s", response.Code, response.Body.String())
+	}
+
+	var channels []channel
+	if err := json.NewDecoder(response.Body).Decode(&channels); err != nil {
+		t.Fatal(err)
+	}
+	if len(channels) != 2 || channels[0] != testChannels[0] {
+		t.Fatalf("unexpected channels: %+v", channels)
+	}
+}
+
+func TestNewRouterRejectsDuplicateChannelID(t *testing.T) {
+	_, err := newRouter(testEdges, []channel{
+		{ID: "demo", Broadcast: "/demo"},
+		{ID: "demo", Broadcast: "/other"},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate channel ID to fail")
+	}
+}
+
+func TestConfigHandler(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/config", nil)
+	response := httptest.NewRecorder()
+	configHandler(clientConfig{
+		MoQURL:             "https://192.0.2.10:4443",
+		CertificateSHA256:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		CacheRetentionSecs: 30,
+		GroupDurationSecs:  2,
+	})(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("got status %d: %s", response.Code, response.Body.String())
+	}
+
+	var config clientConfig
+	if err := json.NewDecoder(response.Body).Decode(&config); err != nil {
+		t.Fatal(err)
+	}
+	if config.MoQURL != "https://192.0.2.10:4443" || config.CertificateSHA256 == "" || config.CacheRetentionSecs != 30 || config.GroupDurationSecs != 2 {
+		t.Fatalf("unexpected config: %+v", config)
+	}
+}
+
+func TestParseCertificateSHA256(t *testing.T) {
+	const upper = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	got, err := parseCertificateSHA256("  " + upper + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != strings.ToLower(upper) {
+		t.Fatalf("unexpected normalized fingerprint: %q", got)
+	}
+	if _, err := parseCertificateSHA256("not-a-fingerprint"); err == nil {
+		t.Fatal("expected invalid fingerprint to fail")
 	}
 }
 
@@ -111,7 +199,7 @@ func TestAlgorithmComparison(t *testing.T) {
 }
 
 func TestCompareHandler(t *testing.T) {
-	router, err := newRouter(testEdges)
+	router, err := newRouter(testEdges, testChannels)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -269,7 +269,13 @@ func {{ $goStructName }}AssertLayout(s *DWARFStruct) error {
 func (c *{{ $goStructName }}) Add(other *{{ $goStructName }}) {
 	{{- range $f := $s.Fields }}
 	{{- $fname := snakeCaseToCamelCase $f.Name }}
+	{{- if gt $f.ArraySize 0 }}
+	for i := range c.{{ $fname }} {
+		c.{{ $fname }}[i] += other.{{ $fname }}[i]
+	}
+	{{- else }}
 	c.{{ $fname }} += other.{{ $fname }}
+	{{- end }}
 	{{- end }}
 }
 {{ end }}{{/* $s.DeriveAdd */}}
@@ -288,9 +294,17 @@ func (c *{{ $goStructName }}) String() string {
 	buf.WriteString("{{ $goStructName }}{")
 	{{- range $f := $s.Fields }}
 	{{- $fname := snakeCaseToCamelCase $f.Name }}
+	{{- if gt $f.ArraySize 0 }}
+	for i, value := range c.{{ $fname }} {
+		if value != 0 {
+			buf.WriteString(fmt.Sprintf("{{ $fname }}[%d]=%d, ", i, value))
+		}
+	}
+	{{- else }}
 	if c.{{ $fname }} != 0 {
 		buf.WriteString(fmt.Sprintf("{{ $fname }}=%d, ", c.{{ $fname }}))
 	}
+	{{- end }}
 	{{- end }}
 	if strings.HasSuffix(buf.String(), ", ") {
 		buf.Truncate(buf.Len() - 2)
