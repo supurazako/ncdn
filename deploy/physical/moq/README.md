@@ -139,8 +139,10 @@ sudo ./l4lb \
   -metricsListenAddr 192.168.20.5:9100 \
   -backendNames C0,C1 \
   -healthCheckEnabled=false \
-  -dests 'fd00:4::7;e0:51:d8:1d:48:c3,fd00:4::8;84:a9:3e:1e:7f:b3,'
+  -dests 'fd00:4::5;38:05:25:37:ce:60,fd00:4::7;e0:51:d8:1d:48:c3,fd00:4::8;84:a9:3e:1e:7f:b3,'
 ```
+
+`-dests`の先頭はL4LB自身で、実際の転送先は2件目のC0と3件目のC1である。
 
 初期実装のUDP接続固定は送信元IP・送信元port・宛先portのhashを使う。NAT rebindingとQUIC Connection Migrationは対象外である。
 
