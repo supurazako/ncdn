@@ -108,6 +108,7 @@ function createPlayer(channel, route, generation, startGroup) {
   } else {
     globalThis.__NCDN_REWIND_START_GROUP = startGroup;
   }
+  globalThis.__NCDN_PLAYER_GENERATION = generation;
   player.setAttribute("url", route.url);
 
   renderObserver = new MutationObserver(() => {
@@ -191,7 +192,7 @@ async function initialize() {
 }
 
 globalThis.addEventListener("ncdn-moq-group", (event) => {
-  if (!Number.isInteger(event.detail?.group)) return;
+  if (!Number.isInteger(event.detail?.group) || event.detail.generation !== connectGeneration) return;
   const group = event.detail.group;
   if (playbackMode === "live") {
     latestGroup = Math.max(latestGroup ?? group, group);

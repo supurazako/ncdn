@@ -276,7 +276,7 @@ func (lb *L4LB) Close() error {
 }
 
 func (lb *L4LB) DumpCounters() error {
-	cnt, err := lb.bindings.ReadStatCountersAggregate()
+	cnt, err := lb.ReadCounters()
 	if err != nil {
 		return err
 	}
@@ -284,6 +284,11 @@ func (lb *L4LB) DumpCounters() error {
 	slog.Info(cnt.String())
 
 	return nil
+}
+
+// ReadCounters returns a point-in-time aggregate of all per-CPU XDP counters.
+func (lb *L4LB) ReadCounters() (*StatCounters, error) {
+	return lb.bindings.ReadStatCountersAggregate()
 }
 
 // `PrepSystemForXDP` configures RLIMIT_MEMLOCK to ensure enough room to

@@ -65,6 +65,7 @@ services:
     image: caddy:2.10-alpine
     environment:
       GUI_DOMAIN: ${GUI_DOMAIN:-moq.supurazako.com}
+      L4LB_METRICS_URL: ${L4LB_METRICS_URL:-http://192.168.20.5:9100}
     ports:
       - "80:80"
       - "443:443"

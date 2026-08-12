@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ncdn · PoP Distribution</title>
+  <link rel="stylesheet" href="./distribution.css">
+</head>
+<body>
+  <main class="dashboard">
+    <header>
+      <div>
+        <p class="eyebrow">NCDN / LIVE TELEMETRY</p>
+        <h1>PoP Distribution</h1>
+        <p class="description">L4LBが実際に選択したEdgeへのpacket分布</p>
+      </div>
+      <div class="header-actions">
+        <a href="./">← PLAYER</a>
+        <span id="connection-state" class="state waiting"><i></i> CONNECTING</span>
+      </div>
+    </header>
+
+    <section class="summary">
+      <article><span>VIP</span><strong id="vip">—</strong></article>
+      <article><span>ALGORITHM</span><strong id="algorithm">—</strong></article>
+      <article><span>TOTAL RATE</span><strong id="total-pps">0 pps</strong></article>
+      <article><span>THROUGHPUT</span><strong id="total-rate">0 bps</strong></article>
+    </section>
+
+    <section class="topology-card">
+      <div class="client node"><span>CLIENTS</span><strong>Internet</strong><small>QUIC / UDP 4443</small></div>
+      <div class="path incoming"><i></i><i></i><i></i></div>
+      <div class="lb node"><span>LOAD BALANCER</span><strong>L4LB</strong><small id="lb-detail">waiting for telemetry</small></div>
+      <div id="edge-grid" class="edge-grid"></div>
+    </section>
+
+    <section class="lower-grid">
+      <article class="panel split-panel">
+        <div class="panel-title"><span>DISTRIBUTION</span><small>直近1秒のpacket比率</small></div>
+        <div id="split-bar" class="split-bar"></div>
+        <div id="split-legend" class="split-legend"></div>
+      </article>
+      <article class="panel history-panel">
+        <div class="panel-title"><span>PACKETS / SECOND</span><small>直近60秒</small></div>
+        <canvas id="history" width="900" height="220"></canvas>
+      </article>
+    </section>
+
+    <footer>
+      <span>集計値はPoP全体の転送結果です。現在のブラウザ自身の接続先を示すものではありません。</span>
+      <time id="updated-at">未取得</time>
+    </footer>
+  </main>
+  <script type="module" src="./distribution.js"></script>
+</body>
+</html>

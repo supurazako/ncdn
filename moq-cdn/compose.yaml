@@ -23,7 +23,7 @@ services:
       - "4443:4443/udp"
       - "4443:4443/tcp"
     volumes:
-      - ./moqdev/relay.toml:/config/relay.toml:ro
+      - ./moqdev/edge-relay.toml:/config/relay.toml:ro
     depends_on:
       - origin-relay
 
@@ -39,7 +39,7 @@ services:
       - "4444:4443/udp"
       - "4444:4443/tcp"
     volumes:
-      - ./moqdev/relay.toml:/config/relay.toml:ro
+      - ./moqdev/edge-relay.toml:/config/relay.toml:ro
     depends_on:
       - origin-relay
 

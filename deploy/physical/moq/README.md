@@ -48,6 +48,7 @@ cat >.env <<'EOF'
 MOQ_LAN_IP=192.168.20.12
 MOQ_EDGE_CERTIFICATE_SHA256=<64桁のfingerprint>
 GUI_DOMAIN=moq.supurazako.com
+L4LB_METRICS_URL=http://192.168.20.5:9100
 EOF
 docker compose -f compose.publisher.yaml up -d --build
 docker compose -f compose.publisher.yaml logs -f
@@ -135,6 +136,8 @@ sudo ./l4lb \
   -vip6 2401:5e40:10ff:ff04::1 \
   -underlayMTU 1500 \
   -udpPort 4443 \
+  -metricsListenAddr 192.168.20.5:9100 \
+  -backendNames C0,C1 \
   -healthCheckEnabled=false \
   -dests 'fd00:4::7;e0:51:d8:1d:48:c3,fd00:4::8;84:a9:3e:1e:7f:b3,'
 ```
@@ -159,5 +162,8 @@ curl -fsS http://127.0.0.1:4443/certificate.sha256
 2. 12秒以上待って「10秒戻る」を押すと過去Groupから再生される。
 3. 「LIVEへ戻る」で最新Groupへ再購読する。
 4. C0/C1のどちらへ振り分けられてもTLS handshakeが成功する。
+5. `/distribution.html`でC0/C1への実packet分布、PPS、throughputが更新される。
+
+分散画面はL4LBの実測カウンタを表示するPoP全体の統計であり、画面を開いたブラウザ自身がどちらのEdgeへ接続したかを示すものではない。
 
 停止時は各directoryで対応するCompose fileに`down`を実行する。

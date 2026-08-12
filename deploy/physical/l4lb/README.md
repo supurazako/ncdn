@@ -25,6 +25,8 @@ sudo ./l4lb \
   -underlayMTU 1500 \
   -selectionAlgorithm rendezvous \
   -udpPort 4443 \
+  -metricsListenAddr 192.168.20.5:9100 \
+  -backendNames C0,C1 \
   -dests '<L4LB IPv6>;<L4LB MAC>,<L7LB IPv6>;<L7LB MAC>,'
 ```
 
@@ -39,5 +41,7 @@ sudo ./l4lb \
 RendezvousとMaglevのtableは起動時またはdestination更新時にcontrol planeで生成する。XDPのpacket処理は、どちらも1回のeBPF map lookupで行う。
 
 `-udpPort 4443`を指定すると、TCPに加えてVIP宛UDP/4443を同じdestination poolへ転送する。これはC0/C1上のMoQ Edge Relay用である。`0`（default）ではUDP転送を無効化し、それ以外のVIP宛UDPはdropする。初期実装ではUDP flowを送信元IP・送信元port・宛先portで固定する。
+
+`-metricsListenAddr`を指定すると、`GET /distribution`でbackend別packet/byte累計を取得できる。PiのVisualizerからLAN内で読むため、Internet側アドレスにはbindしない。`-backendNames`は`-dests`のL4LB自身を除いた順番に対応する。
 
 実行前に、NIC名、IP address、MAC address、VIPのroute、MTUを実環境の値へ置き換える。XDP driver modeに対応しないNICでは`-xdpMode generic`を使用する。

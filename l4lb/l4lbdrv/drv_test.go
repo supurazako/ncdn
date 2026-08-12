@@ -565,6 +565,9 @@ func TestL4LBForwardsConfiguredUDPPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lb.Close()
+	if err := lb.bindings.ResetStatCounters(); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, test := range []struct {
 		name string
@@ -584,6 +587,13 @@ func TestL4LBForwardsConfiguredUDPPort(t *testing.T) {
 			wrongPort := serializeUDPPacket(t, test.src, test.dst, 53000, 4444, lbMAC)
 			runXDP(t, lb, wrongPort, XDP_DROP)
 		})
+	}
+	counters, err := lb.ReadCounters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.DestinationPacketTotal[0] != 2 || counters.DestinationByteTotal[0] == 0 {
+		t.Fatalf("unexpected destination counters: %s", counters)
 	}
 }
 

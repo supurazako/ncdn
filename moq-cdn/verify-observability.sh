@@ -39,6 +39,8 @@ wait_for_url "$base/api/config" "$tmp_dir/config.json"
 wait_for_url "$base/" "$tmp_dir/index.html"
 wait_for_url "$base/bootstrap.js" "$tmp_dir/bootstrap.js"
 wait_for_url "$base/app.js" "$tmp_dir/app.js"
+wait_for_url "$base/distribution.html" "$tmp_dir/distribution.html"
+wait_for_url "$base/distribution.js" "$tmp_dir/distribution.js"
 wait_for_url "$base/vendor/watch-element.js" "$tmp_dir/watch-element.js"
 
 grep -Eq '^[0-9a-fA-F]{64}$' "$tmp_dir/edge-c0.sha256"
@@ -52,6 +54,9 @@ grep -F 'createElement("moq-watch")' "$tmp_dir/app.js" >/dev/null
 grep -F 'websocket = { enabled: false }' "$tmp_dir/app.js" >/dev/null
 grep -F '10秒戻る' "$tmp_dir/index.html" >/dev/null
 grep -F '__NCDN_REWIND_START_GROUP' "$tmp_dir/watch-element.js" >/dev/null
+test "$(grep -o 'ncdn-moq-group' "$tmp_dir/watch-element.js" | wc -l)" -eq 1
+grep -F 'PoP Distribution' "$tmp_dir/distribution.html" >/dev/null
+grep -F '/api/distribution' "$tmp_dir/distribution.js" >/dev/null
 
 wait_for_url "$base/api/route?namespace=motion.hang&strategy=rendezvous" "$tmp_dir/motion-route.json"
 wait_for_url "$base/api/route?namespace=bars.hang&strategy=rendezvous" "$tmp_dir/bars-route.json"
@@ -98,6 +103,7 @@ echo "relay_cluster=ok"
 echo "channels=motion.hang,bars.hang"
 echo "media_flow=ok"
 echo "shared_vip_config=ok"
+echo "distribution_visualizer=ok"
 echo "rewind_player=ok"
 echo "routing_experiment=ok"
 echo "browser_webtransport=manual-check-required"

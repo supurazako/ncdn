@@ -69,6 +69,8 @@ struct stat_counters { /* go:Add,String */
   uint64_t icmpv6_error_forwarded_total; // HELP Number of ICMPv6 errors forwarded to a cache destination.
   uint64_t failed_adjust_head_total; // HELP Number of xdp_adjust_head failures.
   uint64_t failed_adjust_tail_total; // HELP Number of xdp_adjust_tail failures.
+  uint64_t destination_packet_total[255]; // HELP Number of packets selected for each cache destination.
+  uint64_t destination_byte_total[255]; // HELP Number of inner IP bytes selected for each cache destination.
 } ALIGN8;
 // clang-format on
 
@@ -861,6 +863,15 @@ int lb_main(struct xdp_md* ctx) {
   uint8_t* dest_ip6 = dest->ip6_address;
   uint8_t* dest_mac = dest->mac_address;
 #endif
+
+  // dest_idx starts at one because destinations_map[0] is the L4LB itself.
+  // These fixed arrays reuse the existing per-CPU stats lookup, so observing
+  // distribution does not add another map lookup to the forwarding hot path.
+  uint32_t stats_idx = dest_idx - 1;
+  if (stats_idx < DESTINATIONS_SIZE) {
+    COUNT(c, destination_packet_total[stats_idx]);
+    COUNT_ADD(c, destination_byte_total[stats_idx], inner_len);
+  }
 
 #if L4LB_L2_DSR
   // The cache is directly reachable on the same Ethernet segment. Preserve

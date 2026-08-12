@@ -25,6 +25,7 @@ HTTP CDNではL7LB/Cacheとして動くC0/C1を、MoQではEdge Relayとして�
 - GUIからchannelを切り替え、共通VIPへWebTransport接続
 - 30秒・128MBのMoQ Group cache
 - Edge Cacheの過去Groupを使う「10秒戻る」と「LIVEへ戻る」
+- L4LBのbackend別packet/byte実測値を1画面で見る分散Visualizer
 - Raspberry Piと既存C0/C1へ分けて配置できるdeploy bundle
 
 ## 固定バージョン

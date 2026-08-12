@@ -53,11 +53,13 @@ deploy-moq: ## Publisher/Edge分離構成のMoQ CDNをビルドする
 	cp deploy/physical/moq/compose.publisher.yaml "$(DIST_ROOT)/moq-publisher/compose.publisher.yaml"
 	cp deploy/physical/moq/README.md "$(DIST_ROOT)/moq-edge/README.md"
 	cp deploy/physical/moq/README.md "$(DIST_ROOT)/moq-publisher/README.md"
-	cp moq-cdn/moqdev/relay.toml "$(DIST_ROOT)/moq-edge/relay.toml"
+	cp moq-cdn/moqdev/edge-relay.toml "$(DIST_ROOT)/moq-edge/relay.toml"
 	cp moq-cdn/moqdev/relay.toml "$(DIST_ROOT)/moq-publisher/relay.toml"
 	cp deploy/physical/moq/generate-edge-cert.sh "$(DIST_ROOT)/moq-edge/generate-edge-cert.sh"
 	cp deploy/physical/moq/Caddyfile deploy/physical/moq/ffmpeg.Dockerfile "$(DIST_ROOT)/moq-publisher/"
-	cp moq-cdn/visualizer/index.html moq-cdn/visualizer/app.js moq-cdn/visualizer/bootstrap.js moq-cdn/visualizer/rewind.js moq-cdn/visualizer/style.css "$(DIST_ROOT)/moq-publisher/visualizer/"
+	cp moq-cdn/visualizer/index.html moq-cdn/visualizer/app.js moq-cdn/visualizer/bootstrap.js moq-cdn/visualizer/rewind.js moq-cdn/visualizer/style.css \
+		moq-cdn/visualizer/distribution.html moq-cdn/visualizer/distribution.js moq-cdn/visualizer/distribution.css \
+		"$(DIST_ROOT)/moq-publisher/visualizer/"
 	chmod +x "$(DIST_ROOT)/moq-edge/generate-edge-cert.sh"
 
 .PHONY: l4lb-variants

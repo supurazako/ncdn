@@ -1,0 +1,18 @@
+[log]
+level = "info"
+
+[server]
+bind = "[::]:4443"
+
+[web.http]
+listen = "[::]:4443"
+
+[auth.public]
+subscribe = ""
+
+[cache]
+capacity = "128MB"
+duration = "30s"
+
+[stats]
+enabled = true
