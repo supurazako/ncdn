@@ -31,8 +31,6 @@ deploy-l7lb: ## L7LB兼cache serverをビルドする
 	@mkdir -p "$(DIST_ROOT)/l7lb"
 	$(GO_BUILD) -o "$(DIST_ROOT)/l7lb/l7lb" ./popcache
 	cp deploy/physical/l7lb/README.md "$(DIST_ROOT)/l7lb/README.md"
-	cp deploy/physical/l7lb/run-logged.sh "$(DIST_ROOT)/l7lb/run-logged.sh"
-	chmod +x "$(DIST_ROOT)/l7lb/run-logged.sh"
 
 .PHONY: deploy-origin
 deploy-origin: ## Origin serverをビルドする
