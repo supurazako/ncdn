@@ -23,9 +23,10 @@ type Config struct {
 	XdpCapHookPath string
 	UnderlayMTU    uint32
 
-	VIP4  netip.Addr
-	VIP6  netip.Addr
-	Dests DestinationEntries
+	VIP4               netip.Addr
+	VIP6               netip.Addr
+	Dests              DestinationEntries
+	SelectionAlgorithm SelectionAlgorithm
 }
 
 type L4LB struct {
@@ -37,6 +38,11 @@ type L4LB struct {
 }
 
 func New(cfg *Config) (*L4LB, error) {
+	algorithm, err := cfg.SelectionAlgorithm.normalized()
+	if err != nil {
+		return nil, err
+	}
+	cfg.SelectionAlgorithm = algorithm
 	if _, err := cfg.InnerMTU(); err != nil {
 		return nil, err
 	}
@@ -186,13 +192,45 @@ func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
 		return fmt.Errorf("Failed to update DestinationArray: %w", err)
 	}
 
+	if lb.cfg.SelectionAlgorithm == SelectionAlgorithmRendezvous ||
+		lb.cfg.SelectionAlgorithm == SelectionAlgorithmMaglev {
+		var table []uint32
+		var err error
+		if lb.cfg.SelectionAlgorithm == SelectionAlgorithmRendezvous {
+			table, err = buildRendezvousLookup(dests[1:])
+		} else {
+			table, err = buildMaglevLookup(dests[1:])
+		}
+		if err != nil {
+			return fmt.Errorf("Failed to build %s lookup table: %w",
+				lb.cfg.SelectionAlgorithm, err)
+		}
+		lookupKeys := make([]uint32, len(table))
+		for index := range lookupKeys {
+			lookupKeys[index] = uint32(index)
+		}
+		updated, err := lb.bindings.SelectionLookupMap.BatchUpdate(
+			lookupKeys,
+			table,
+			&ebpf.BatchOptions{},
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"Failed to update SelectionLookupMap after %d entries: %w",
+				updated,
+				err,
+			)
+		}
+	}
+
 	err = lb.bindings.ConfigMap.Update(uint32(0), &LbConfig{
-		Vip4Address:   vip4,
-		Vip6Address:   vip6,
-		SrcIp6Address: dests[0].IPv6Addr.As16(),
-		SrcMacAddress: [6]uint8(dests[0].HardwareAddr),
-		NumDests:      uint32(len(dests) - 1),
-		InnerMtu:      innerMTU,
+		Vip4Address:        vip4,
+		Vip6Address:        vip6,
+		SrcIp6Address:      dests[0].IPv6Addr.As16(),
+		SrcMacAddress:      [6]uint8(dests[0].HardwareAddr),
+		NumDests:           uint32(len(dests) - 1),
+		InnerMtu:           innerMTU,
+		SelectionAlgorithm: lb.cfg.SelectionAlgorithm.bpfValue(),
 	}, 0)
 	if err != nil {
 		return fmt.Errorf("Failed to update ConfigMap: %w", err)
@@ -200,12 +238,13 @@ func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
 
 	inlineConfig := inlineLbConfig{
 		Base: LbConfig{
-			Vip4Address:   vip4,
-			Vip6Address:   vip6,
-			SrcIp6Address: dests[0].IPv6Addr.As16(),
-			SrcMacAddress: [6]uint8(dests[0].HardwareAddr),
-			NumDests:      uint32(min(len(dests)-1, inlineDestinationsSize)),
-			InnerMtu:      innerMTU,
+			Vip4Address:        vip4,
+			Vip6Address:        vip6,
+			SrcIp6Address:      dests[0].IPv6Addr.As16(),
+			SrcMacAddress:      [6]uint8(dests[0].HardwareAddr),
+			NumDests:           uint32(min(len(dests)-1, inlineDestinationsSize)),
+			InnerMtu:           innerMTU,
+			SelectionAlgorithm: lb.cfg.SelectionAlgorithm.bpfValue(),
 		},
 	}
 	for index, destination := range dests[1:min(len(dests), inlineDestinationsSize+1)] {
