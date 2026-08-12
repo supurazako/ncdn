@@ -34,6 +34,7 @@ var healthCheckFailures = flag.Int("healthCheckFailures", 3, "Consecutive health
 var healthCheckSuccesses = flag.Int("healthCheckSuccesses", 2, "Consecutive health check successes before restoring a cache destination")
 var healthCheckPort = flag.Uint("healthCheckPort", 8889, "Cache destination health check port")
 var selectionAlgorithm = flag.String("selectionAlgorithm", "modulo", "Backend selection algorithm: modulo, rendezvous, or maglev")
+var udpPort = flag.Uint("udpPort", 0, "UDP destination port to forward; 0 disables UDP")
 
 func parseDest(deststr string) ([]l4lbdrv.DestinationEntry, error) {
 	commas := strings.Split(deststr, ",")
@@ -94,6 +95,9 @@ func main() {
 	if *healthCheckPort > 65535 {
 		log.Fatalf("Invalid health check port: %d", *healthCheckPort)
 	}
+	if *udpPort > 65535 {
+		log.Fatalf("Invalid UDP port: %d", *udpPort)
+	}
 	if *healthCheckEnabled && *healthCheckFailures <= 0 {
 		log.Fatalf("Invalid health check failure threshold: %d", *healthCheckFailures)
 	}
@@ -118,11 +122,12 @@ func main() {
 		UnderlayMTU:        uint32(*underlayMTU),
 		VIP4:               netip.MustParseAddr(*vip4),
 		VIP6:               netip.MustParseAddr(*vip6),
+		UDPPort:            uint16(*udpPort),
 		Dests:              dests,
 		SelectionAlgorithm: algorithm,
 	}
 	slog.Info("Selected L4LB variant", "variant", *variant, "object", *lbBin,
-		"selectionAlgorithm", algorithm)
+		"selectionAlgorithm", algorithm, "udpPort", *udpPort)
 	lb, err := l4lbdrv.New(cfg)
 	if err != nil {
 		log.Panicf("Failed to create l4lb instance: %v", err)

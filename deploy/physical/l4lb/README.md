@@ -24,6 +24,7 @@ sudo ./l4lb \
   -vip6 2001:db8:100::10 \
   -underlayMTU 1500 \
   -selectionAlgorithm rendezvous \
+  -udpPort 4443 \
   -dests '<L4LB IPv6>;<L4LB MAC>,<L7LB IPv6>;<L7LB MAC>,'
 ```
 
@@ -36,5 +37,7 @@ sudo ./l4lb \
 - `maglev`: lookup tableによって均等性と台数変更時の安定性を両立する。
 
 RendezvousとMaglevのtableは起動時またはdestination更新時にcontrol planeで生成する。XDPのpacket処理は、どちらも1回のeBPF map lookupで行う。
+
+`-udpPort 4443`を指定すると、TCPに加えてVIP宛UDP/4443を同じdestination poolへ転送する。これはC0/C1上のMoQ Edge Relay用である。`0`（default）ではUDP転送を無効化し、それ以外のVIP宛UDPはdropする。初期実装ではUDP flowを送信元IP・送信元port・宛先portで固定する。
 
 実行前に、NIC名、IP address、MAC address、VIPのroute、MTUを実環境の値へ置き換える。XDP driver modeに対応しないNICでは`-xdpMode generic`を使用する。

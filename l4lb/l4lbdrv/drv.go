@@ -25,6 +25,7 @@ type Config struct {
 
 	VIP4               netip.Addr
 	VIP6               netip.Addr
+	UDPPort            uint16
 	Dests              DestinationEntries
 	SelectionAlgorithm SelectionAlgorithm
 }
@@ -228,6 +229,7 @@ func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
 		Vip6Address:        vip6,
 		SrcIp6Address:      dests[0].IPv6Addr.As16(),
 		SrcMacAddress:      [6]uint8(dests[0].HardwareAddr),
+		UdpDestPort:        lb.cfg.UDPPort,
 		NumDests:           uint32(len(dests) - 1),
 		InnerMtu:           innerMTU,
 		SelectionAlgorithm: lb.cfg.SelectionAlgorithm.bpfValue(),
@@ -242,6 +244,7 @@ func (lb *L4LB) syncDestinationsLocked(dests DestinationEntries) error {
 			Vip6Address:        vip6,
 			SrcIp6Address:      dests[0].IPv6Addr.As16(),
 			SrcMacAddress:      [6]uint8(dests[0].HardwareAddr),
+			UdpDestPort:        lb.cfg.UDPPort,
 			NumDests:           uint32(min(len(dests)-1, inlineDestinationsSize)),
 			InnerMtu:           innerMTU,
 			SelectionAlgorithm: lb.cfg.SelectionAlgorithm.bpfValue(),

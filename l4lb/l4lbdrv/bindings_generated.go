@@ -12,32 +12,33 @@ import (
 // Source: ../c/lb.c
 
 const (
-	SELECTION_ALGORITHM_MODULO     = 0     // ../c/lb.c:93
-	SELECTION_ALGORITHM_RENDEZVOUS = 1     // ../c/lb.c:94
-	SELECTION_ALGORITHM_MAGLEV     = 2     // ../c/lb.c:95
-	MAGLEV_LOOKUP_SIZE             = 65537 // ../c/lb.c:98
-	DESTINATIONS_SIZE              = 255   // ../c/lb.c:138
+	SELECTION_ALGORITHM_MODULO     = 0     // ../c/lb.c:95
+	SELECTION_ALGORITHM_RENDEZVOUS = 1     // ../c/lb.c:96
+	SELECTION_ALGORITHM_MAGLEV     = 2     // ../c/lb.c:97
+	MAGLEV_LOOKUP_SIZE             = 65537 // ../c/lb.c:100
+	DESTINATIONS_SIZE              = 255   // ../c/lb.c:140
 )
 
-type StatCounters struct { // ../c/lb.c:50
-	RxPacketTotal                 uint64 // ../c/lb.c:51
-	RxTotalSize                   uint64 // ../c/lb.c:52
-	TooShortPacketTotal           uint64 // ../c/lb.c:54
-	UnsupportedNetworkPacketTotal uint64 // ../c/lb.c:55
-	Ipv4PacketTotal               uint64 // ../c/lb.c:56
-	Ipv6PacketTotal               uint64 // ../c/lb.c:57
-	IpOptionPacketTotal           uint64 // ../c/lb.c:58
-	NonSupportedProtoPacketTotal  uint64 // ../c/lb.c:59
-	NoVipMatchTotal               uint64 // ../c/lb.c:60
-	NoHealthyDestinationTotal     uint64 // ../c/lb.c:61
-	MtuExceededPacketTotal        uint64 // ../c/lb.c:62
-	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:63
-	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:64
-	InvalidIcmpErrorTotal         uint64 // ../c/lb.c:65
-	Icmpv4ErrorForwardedTotal     uint64 // ../c/lb.c:66
-	Icmpv6ErrorForwardedTotal     uint64 // ../c/lb.c:67
-	FailedAdjustHeadTotal         uint64 // ../c/lb.c:68
-	FailedAdjustTailTotal         uint64 // ../c/lb.c:69
+type StatCounters struct { // ../c/lb.c:51
+	RxPacketTotal                 uint64 // ../c/lb.c:52
+	RxTotalSize                   uint64 // ../c/lb.c:53
+	TooShortPacketTotal           uint64 // ../c/lb.c:55
+	UnsupportedNetworkPacketTotal uint64 // ../c/lb.c:56
+	Ipv4PacketTotal               uint64 // ../c/lb.c:57
+	Ipv6PacketTotal               uint64 // ../c/lb.c:58
+	UdpPacketTotal                uint64 // ../c/lb.c:59
+	IpOptionPacketTotal           uint64 // ../c/lb.c:60
+	NonSupportedProtoPacketTotal  uint64 // ../c/lb.c:61
+	NoVipMatchTotal               uint64 // ../c/lb.c:62
+	NoHealthyDestinationTotal     uint64 // ../c/lb.c:63
+	MtuExceededPacketTotal        uint64 // ../c/lb.c:64
+	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:65
+	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:66
+	InvalidIcmpErrorTotal         uint64 // ../c/lb.c:67
+	Icmpv4ErrorForwardedTotal     uint64 // ../c/lb.c:68
+	Icmpv6ErrorForwardedTotal     uint64 // ../c/lb.c:69
+	FailedAdjustHeadTotal         uint64 // ../c/lb.c:70
+	FailedAdjustTailTotal         uint64 // ../c/lb.c:71
 }
 
 func StatCountersAssertLayout(s *DWARFStruct) error {
@@ -83,6 +84,11 @@ func StatCountersAssertLayout(s *DWARFStruct) error {
 	doff = fs["ipv6_packet_total"].Offset
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go Ipv6PacketTotal: %d, dwarf ipv6_packet_total: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(StatCounters{}.UdpPacketTotal)
+	doff = fs["udp_packet_total"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go UdpPacketTotal: %d, dwarf udp_packet_total: %d", goff, doff)
 	}
 	goff = unsafe.Offsetof(StatCounters{}.IpOptionPacketTotal)
 	doff = fs["ip_option_packet_total"].Offset
@@ -155,6 +161,7 @@ func (c *StatCounters) Add(other *StatCounters) {
 	c.UnsupportedNetworkPacketTotal += other.UnsupportedNetworkPacketTotal
 	c.Ipv4PacketTotal += other.Ipv4PacketTotal
 	c.Ipv6PacketTotal += other.Ipv6PacketTotal
+	c.UdpPacketTotal += other.UdpPacketTotal
 	c.IpOptionPacketTotal += other.IpOptionPacketTotal
 	c.NonSupportedProtoPacketTotal += other.NonSupportedProtoPacketTotal
 	c.NoVipMatchTotal += other.NoVipMatchTotal
@@ -189,6 +196,9 @@ func (c *StatCounters) String() string {
 	}
 	if c.Ipv6PacketTotal != 0 {
 		buf.WriteString(fmt.Sprintf("Ipv6PacketTotal=%d, ", c.Ipv6PacketTotal))
+	}
+	if c.UdpPacketTotal != 0 {
+		buf.WriteString(fmt.Sprintf("UdpPacketTotal=%d, ", c.UdpPacketTotal))
 	}
 	if c.IpOptionPacketTotal != 0 {
 		buf.WriteString(fmt.Sprintf("IpOptionPacketTotal=%d, ", c.IpOptionPacketTotal))
@@ -233,15 +243,15 @@ func (c *StatCounters) String() string {
 	return buf.String()
 }
 
-type LbConfig struct { // ../c/lb.c:82
-	Vip4Address        uint32    // ../c/lb.c:83
-	Vip6Address        [16]uint8 // ../c/lb.c:84
-	SrcIp6Address      [16]uint8 // ../c/lb.c:85
-	SrcMacAddress      [6]uint8  // ../c/lb.c:86
-	Padding            [2]uint8  // ../c/lb.c:87
-	NumDests           uint32    // ../c/lb.c:88
-	InnerMtu           uint32    // ../c/lb.c:89
-	SelectionAlgorithm uint32    // ../c/lb.c:90
+type LbConfig struct { // ../c/lb.c:84
+	Vip4Address        uint32    // ../c/lb.c:85
+	Vip6Address        [16]uint8 // ../c/lb.c:86
+	SrcIp6Address      [16]uint8 // ../c/lb.c:87
+	SrcMacAddress      [6]uint8  // ../c/lb.c:88
+	UdpDestPort        uint16    // ../c/lb.c:89
+	NumDests           uint32    // ../c/lb.c:90
+	InnerMtu           uint32    // ../c/lb.c:91
+	SelectionAlgorithm uint32    // ../c/lb.c:92
 }
 
 func LbConfigAssertLayout(s *DWARFStruct) error {
@@ -278,10 +288,10 @@ func LbConfigAssertLayout(s *DWARFStruct) error {
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go SrcMacAddress: %d, dwarf src_mac_address: %d", goff, doff)
 	}
-	goff = unsafe.Offsetof(LbConfig{}.Padding)
-	doff = fs["padding"].Offset
+	goff = unsafe.Offsetof(LbConfig{}.UdpDestPort)
+	doff = fs["udp_dest_port"].Offset
 	if goff != uintptr(doff) {
-		return fmt.Errorf("offset mismatch: go Padding: %d, dwarf padding: %d", goff, doff)
+		return fmt.Errorf("offset mismatch: go UdpDestPort: %d, dwarf udp_dest_port: %d", goff, doff)
 	}
 	goff = unsafe.Offsetof(LbConfig{}.NumDests)
 	doff = fs["num_dests"].Offset

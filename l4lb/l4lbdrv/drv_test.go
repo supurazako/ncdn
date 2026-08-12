@@ -545,6 +545,48 @@ func TestL4LBUnsupportedVIPProtocolPolicy(t *testing.T) {
 	}
 }
 
+func TestL4LBForwardsConfiguredUDPPort(t *testing.T) {
+	vip4 := netip.MustParseAddr("192.0.2.10")
+	vip6 := netip.MustParseAddr("2001:db8:100::10")
+	lbMAC := []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xfe}
+	backend := netip.MustParseAddr("2001:db8::10")
+	lb, err := New(&Config{
+		BinPath:     "../c/lb.o",
+		UnderlayMTU: 1500,
+		VIP4:        vip4,
+		VIP6:        vip6,
+		UDPPort:     4443,
+		Dests: []DestinationEntry{
+			{IPv6Addr: netip.MustParseAddr("2001:db8::fe"), HardwareAddr: lbMAC},
+			{IPv6Addr: backend, HardwareAddr: []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0x10}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lb.Close()
+
+	for _, test := range []struct {
+		name string
+		src  netip.Addr
+		dst  netip.Addr
+	}{
+		{name: "IPv4", src: netip.MustParseAddr("198.51.100.20"), dst: vip4},
+		{name: "IPv6", src: netip.MustParseAddr("2001:db8:200::20"), dst: vip6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			packet := serializeUDPPacket(t, test.src, test.dst, 53000, 4443, lbMAC)
+			forwarded := runXDP(t, lb, packet, XDP_TX)
+			if got := outerIPv6Destination(t, forwarded); got != backend {
+				t.Fatalf("outer destination = %s, want %s", got, backend)
+			}
+
+			wrongPort := serializeUDPPacket(t, test.src, test.dst, 53000, 4444, lbMAC)
+			runXDP(t, lb, wrongPort, XDP_DROP)
+		})
+	}
+}
+
 func TestL4LBIPv4TooLargeReturnsFragmentationNeeded(t *testing.T) {
 	vip4 := netip.MustParseAddr("192.0.2.10")
 	clientIP := netip.MustParseAddr("10.0.0.123")
@@ -1017,11 +1059,26 @@ func newTestLB(t *testing.T, vip4, vip6 netip.Addr, lbMAC []byte) *L4LB {
 
 func runUDPPacket(t *testing.T, lb *L4LB, src, dst netip.Addr, lbMAC []byte) uint32 {
 	t.Helper()
+	packet := serializeUDPPacket(t, src, dst, 12345, 8889, lbMAC)
+	retval, _, err := lb.bindings.LBMain.Test(packet)
+	if err != nil {
+		t.Fatalf("Failed to execute XDP program: %v", err)
+	}
+	return retval
+}
+
+func serializeUDPPacket(
+	t *testing.T,
+	src, dst netip.Addr,
+	srcPort, dstPort uint16,
+	lbMAC []byte,
+) []byte {
+	t.Helper()
 	eth := &layers.Ethernet{
 		SrcMAC: []byte{0x00, 0x00, 0x5e, 0x00, 0x53, 0xff},
 		DstMAC: lbMAC,
 	}
-	udp := &layers.UDP{SrcPort: 12345, DstPort: 8889}
+	udp := &layers.UDP{SrcPort: layers.UDPPort(srcPort), DstPort: layers.UDPPort(dstPort)}
 	var networkLayer gopacket.NetworkLayer
 	var serializableNetworkLayer gopacket.SerializableLayer
 	if src.Is4() && dst.Is4() {
@@ -1053,11 +1110,7 @@ func runUDPPacket(t *testing.T, lb *L4LB, src, dst netip.Addr, lbMAC []byte) uin
 		eth, serializableNetworkLayer, udp); err != nil {
 		t.Fatalf("Failed to serialize UDP packet: %v", err)
 	}
-	retval, _, err := lb.bindings.LBMain.Test(buf.Bytes())
-	if err != nil {
-		t.Fatalf("Failed to execute XDP program: %v", err)
-	}
-	return retval
+	return buf.Bytes()
 }
 
 func runIPv4TCPPacket(

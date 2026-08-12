@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+#include <netinet/udp.h>
 
 #include <bpf/bpf_helpers.h>
 
@@ -55,8 +56,9 @@ struct stat_counters { /* go:Add,String */
   uint64_t unsupported_network_packet_total; // HELP Number of packets passed because they were neither IPv4 nor IPv6.
   uint64_t ipv4_packet_total; // HELP Number of accepted IPv4 packets.
   uint64_t ipv6_packet_total; // HELP Number of accepted IPv6 packets.
+  uint64_t udp_packet_total; // HELP Number of accepted UDP packets for the configured service port.
   uint64_t ip_option_packet_total; // HELP Number of VIP packets dropped because they had IPv4 options.
-  uint64_t non_supported_proto_packet_total; // HELP Number of VIP packets dropped because TCP did not immediately follow the IP header.
+  uint64_t non_supported_proto_packet_total; // HELP Number of VIP packets dropped because the transport protocol or UDP destination port was unsupported.
   uint64_t no_vip_match_total; // HELP Number of packets passed because their destination did not match a VIP.
   uint64_t no_healthy_destination_total; // HELP Number of VIP packets dropped because no healthy cache destination was available.
   uint64_t mtu_exceeded_packet_total; // HELP Number of packets too large for IPv6 encapsulation over the configured underlay MTU.
@@ -84,7 +86,7 @@ struct lb_config { /* go: */
   uint8_t vip6_address[16];
   uint8_t src_ip6_address[16];
   uint8_t src_mac_address[6];
-  uint8_t padding[2];
+  uint16_t udp_dest_port;
   uint32_t num_dests;
   uint32_t inner_mtu;
   uint32_t selection_algorithm;
@@ -178,7 +180,7 @@ struct icmp_error_header {
 
 // ICMP errors are only required to quote the beginning of the transport
 // header. The ports are sufficient to recover the original load-balancer key.
-struct tcp_ports {
+struct transport_ports {
   uint16_t source;
   uint16_t dest;
 } PACKED;
@@ -437,24 +439,43 @@ int lb_main(struct xdp_md* ctx) {
   int ip_version;
 
   if (eth->h_proto == htons(ETH_P_IP)) {
-    if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
-            sizeof(struct tcphdr) > data_end) {
+    if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) > data_end) {
       EXIT(XDP_PASS);
     }
     struct iphdr* ip4 = (void*)(eth + 1);
     if (ip4->version != 4 || ip4->daddr != config->vip4_address) {
       EXIT(XDP_PASS);
     }
-    if (ip4->ihl != 5 || ip4->protocol != IPPROTO_TCP) {
+    if (ip4->ihl != 5) {
       EXIT(XDP_DROP);
     }
-    struct tcphdr* tcp = (void*)(ip4 + 1);
-    key = flow_hash_ipv4(ip4->saddr, tcp->source, tcp->dest);
+    if (ip4->protocol == IPPROTO_TCP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
+              sizeof(struct tcphdr) >
+          data_end) {
+        EXIT(XDP_DROP);
+      }
+      struct tcphdr* tcp = (void*)(ip4 + 1);
+      key = flow_hash_ipv4(ip4->saddr, tcp->source, tcp->dest);
+    } else if (ip4->protocol == IPPROTO_UDP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
+              sizeof(struct udphdr) >
+          data_end) {
+        EXIT(XDP_DROP);
+      }
+      struct udphdr* udp = (void*)(ip4 + 1);
+      if (config->udp_dest_port == 0 ||
+          ntohs(udp->dest) != config->udp_dest_port) {
+        EXIT(XDP_DROP);
+      }
+      key = flow_hash_ipv4(ip4->saddr, udp->source, udp->dest);
+    } else {
+      EXIT(XDP_DROP);
+    }
     inner_len = ntohs(ip4->tot_len);
     ip_version = 4;
   } else if (eth->h_proto == htons(ETH_P_IPV6)) {
-    if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
-            sizeof(struct tcphdr) > data_end) {
+    if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) > data_end) {
       EXIT(XDP_PASS);
     }
     struct ipv6hdr* ip6 = (void*)(eth + 1);
@@ -466,11 +487,29 @@ int lb_main(struct xdp_md* ctx) {
         ip6->daddr.s6_addr32[3] != vip6[3]) {
       EXIT(XDP_PASS);
     }
-    if (ip6->nexthdr != IPPROTO_TCP) {
+    if (ip6->nexthdr == IPPROTO_TCP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
+              sizeof(struct tcphdr) >
+          data_end) {
+        EXIT(XDP_DROP);
+      }
+      struct tcphdr* tcp = (void*)(ip6 + 1);
+      key = flow_hash_ipv6(&ip6->saddr, tcp->source, tcp->dest);
+    } else if (ip6->nexthdr == IPPROTO_UDP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
+              sizeof(struct udphdr) >
+          data_end) {
+        EXIT(XDP_DROP);
+      }
+      struct udphdr* udp = (void*)(ip6 + 1);
+      if (config->udp_dest_port == 0 ||
+          ntohs(udp->dest) != config->udp_dest_port) {
+        EXIT(XDP_DROP);
+      }
+      key = flow_hash_ipv6(&ip6->saddr, udp->source, udp->dest);
+    } else {
       EXIT(XDP_DROP);
     }
-    struct tcphdr* tcp = (void*)(ip6 + 1);
-    key = flow_hash_ipv6(&ip6->saddr, tcp->source, tcp->dest);
     inner_len = sizeof(struct ipv6hdr) + ntohs(ip6->payload_len);
     ip_version = 6;
   } else {
@@ -602,10 +641,29 @@ int lb_main(struct xdp_md* ctx) {
       minimum_inner_len = sizeof(struct iphdr) + sizeof(struct tcphdr);
       debugk("incoming IPv4 packet: ip=%pI4 port=%u", &ip4->saddr,
              ntohs(tcp->source));
+    } else if (ip4->protocol == IPPROTO_UDP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
+              sizeof(struct udphdr) >
+          data_end) {
+        COUNT(c, too_short_packet_total);
+        EXIT(XDP_DROP);
+      }
+
+      struct udphdr* udp = (struct udphdr*)(ip4 + 1);
+      if (config->udp_dest_port == 0 ||
+          ntohs(udp->dest) != config->udp_dest_port) {
+        COUNT(c, non_supported_proto_packet_total);
+        EXIT(XDP_DROP);
+      }
+      key = flow_hash_ipv4(ip4->saddr, udp->source, udp->dest);
+      minimum_inner_len = sizeof(struct iphdr) + sizeof(struct udphdr);
+      COUNT(c, udp_packet_total);
+      debugk("incoming IPv4 UDP packet: ip=%pI4 port=%u", &ip4->saddr,
+             ntohs(udp->source));
     } else if (ip4->protocol == IPPROTO_ICMP) {
       if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) +
               sizeof(struct icmp_error_header) + sizeof(struct iphdr) +
-              sizeof(struct tcp_ports) >
+              sizeof(struct transport_ports) >
           data_end) {
         COUNT(c, too_short_packet_total);
         EXIT(XDP_DROP);
@@ -620,22 +678,26 @@ int lb_main(struct xdp_md* ctx) {
       }
 
       struct iphdr* quoted_ip4 = (void*)(icmp + 1);
+      struct transport_ports* quoted_ports = (void*)(quoted_ip4 + 1);
       if (quoted_ip4->version != 4 || quoted_ip4->ihl != 5 ||
-          quoted_ip4->protocol != IPPROTO_TCP ||
+          (quoted_ip4->protocol != IPPROTO_TCP &&
+           (quoted_ip4->protocol != IPPROTO_UDP ||
+            config->udp_dest_port == 0 ||
+            ntohs(quoted_ports->source) != config->udp_dest_port)) ||
           (quoted_ip4->frag_off & htons(0x1fff)) != 0 ||
           quoted_ip4->saddr != config->vip4_address) {
         COUNT(c, invalid_icmp_error_total);
         EXIT(XDP_DROP);
       }
-      struct tcp_ports* quoted_tcp = (void*)(quoted_ip4 + 1);
-      key = flow_hash_ipv4(quoted_ip4->daddr, quoted_tcp->dest,
-                           quoted_tcp->source);
+      key = flow_hash_ipv4(quoted_ip4->daddr, quoted_ports->dest,
+                           quoted_ports->source);
       minimum_inner_len = sizeof(struct iphdr) +
                           sizeof(struct icmp_error_header) +
-                          sizeof(struct iphdr) + sizeof(struct tcp_ports);
+                          sizeof(struct iphdr) +
+                          sizeof(struct transport_ports);
       icmp_error_version = 4;
       debugk("incoming ICMPv4 error: quoted_ip=%pI4 port=%u",
-             &quoted_ip4->daddr, ntohs(quoted_tcp->dest));
+             &quoted_ip4->daddr, ntohs(quoted_ports->dest));
     } else {
       COUNT(c, non_supported_proto_packet_total);
       EXIT(XDP_DROP);
@@ -677,10 +739,28 @@ int lb_main(struct xdp_md* ctx) {
       key = flow_hash_ipv6(&ip6->saddr, tcp->source, tcp->dest);
       minimum_inner_len = sizeof(struct ipv6hdr) + sizeof(struct tcphdr);
       debugk("incoming IPv6 packet: port=%u", ntohs(tcp->source));
+    } else if (ip6->nexthdr == IPPROTO_UDP) {
+      if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
+              sizeof(struct udphdr) >
+          data_end) {
+        COUNT(c, too_short_packet_total);
+        EXIT(XDP_DROP);
+      }
+
+      struct udphdr* udp = (struct udphdr*)(ip6 + 1);
+      if (config->udp_dest_port == 0 ||
+          ntohs(udp->dest) != config->udp_dest_port) {
+        COUNT(c, non_supported_proto_packet_total);
+        EXIT(XDP_DROP);
+      }
+      key = flow_hash_ipv6(&ip6->saddr, udp->source, udp->dest);
+      minimum_inner_len = sizeof(struct ipv6hdr) + sizeof(struct udphdr);
+      COUNT(c, udp_packet_total);
+      debugk("incoming IPv6 UDP packet: port=%u", ntohs(udp->source));
     } else if (ip6->nexthdr == IPPROTO_ICMPV6) {
       if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) +
               sizeof(struct icmp_error_header) + sizeof(struct ipv6hdr) +
-              sizeof(struct tcp_ports) >
+              sizeof(struct transport_ports) >
           data_end) {
         COUNT(c, too_short_packet_total);
         EXIT(XDP_DROP);
@@ -696,8 +776,13 @@ int lb_main(struct xdp_md* ctx) {
       }
 
       struct ipv6hdr* quoted_ip6 = (void*)(icmp + 1);
+      struct transport_ports* quoted_ports = (void*)(quoted_ip6 + 1);
       uint32_t* vip6_quoted = (uint32_t*)config->vip6_address;
-      if (quoted_ip6->version != 6 || quoted_ip6->nexthdr != IPPROTO_TCP ||
+      if (quoted_ip6->version != 6 ||
+          (quoted_ip6->nexthdr != IPPROTO_TCP &&
+           (quoted_ip6->nexthdr != IPPROTO_UDP ||
+            config->udp_dest_port == 0 ||
+            ntohs(quoted_ports->source) != config->udp_dest_port)) ||
           quoted_ip6->saddr.s6_addr32[0] != vip6_quoted[0] ||
           quoted_ip6->saddr.s6_addr32[1] != vip6_quoted[1] ||
           quoted_ip6->saddr.s6_addr32[2] != vip6_quoted[2] ||
@@ -705,14 +790,14 @@ int lb_main(struct xdp_md* ctx) {
         COUNT(c, invalid_icmp_error_total);
         EXIT(XDP_DROP);
       }
-      struct tcp_ports* quoted_tcp = (void*)(quoted_ip6 + 1);
-      key = flow_hash_ipv6(&quoted_ip6->daddr, quoted_tcp->dest,
-                           quoted_tcp->source);
+      key = flow_hash_ipv6(&quoted_ip6->daddr, quoted_ports->dest,
+                           quoted_ports->source);
       minimum_inner_len = sizeof(struct ipv6hdr) +
                           sizeof(struct icmp_error_header) +
-                          sizeof(struct ipv6hdr) + sizeof(struct tcp_ports);
+                          sizeof(struct ipv6hdr) +
+                          sizeof(struct transport_ports);
       icmp_error_version = 6;
-      debugk("incoming ICMPv6 error: port=%u", ntohs(quoted_tcp->dest));
+      debugk("incoming ICMPv6 error: port=%u", ntohs(quoted_ports->dest));
     } else {
       COUNT(c, non_supported_proto_packet_total);
       EXIT(XDP_DROP);
