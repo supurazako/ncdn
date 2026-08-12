@@ -11,18 +11,20 @@ L4LBから届くIPv4-in-IPv6とIPv6-in-IPv6を受け取るため、起動前に`
   -nodeId C0 \
   -listenAddr :8889 \
   -originURL 'http://[<Origin IPv6>]:8888/' \
-  -runtimeStatsInterval 10s
+  -runtimeStatsInterval 10s \
+  -logFile ./logs/l7lb.log
 ```
 
-標準では送信元、method、host、path、処理時間を含むaccess logを標準エラーへ全件出力する。query stringは認証情報を含む可能性があるため記録しない。定期logにはrequest数、処理中request、RSS、Go heap、goroutine、GC、CPU使用率、取得できる場合は最高温度、cache使用量が含まれる。systemdで起動する場合はjournaldから確認できる。
+標準では送信元、method、host、path、処理時間を含むaccess logを標準エラーへ全件出力する。query stringは認証情報を含む可能性があるため記録しない。定期logにはrequest数、処理中request、RSS、Go heap、goroutine、GC、CPU使用率、取得できる場合は最高温度、cache使用量が含まれる。
 
-手動検証でfileにも残す場合は標準出力と標準エラーをまとめて`tee`へ渡す。
+`-logFile`を指定すると、標準エラーへの出力を維持したまま同じ内容をfileにも追記する。directoryは自動作成され、OSやprocessの再起動後も以前のlogを確認できる。既定では1 fileあたり128 MiB、backup 3世代でrotationする。
 
 ```sh
-./l7lb <options> 2>&1 | tee -a l7lb.log
+ls -lh logs/l7lb.log*
+tail -f logs/l7lb.log
 ```
 
-長時間運用では、配布物に含まれるsystemd unitと設定例を使用する。
+systemd/journaldで管理する場合は、配布物に含まれるunitと設定例も使用できる。
 
 ```sh
 sudo install -D -m 0755 l7lb /opt/ncdn/l7lb/l7lb

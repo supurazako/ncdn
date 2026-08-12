@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/yzp0n/ncdn/httprps"
@@ -24,9 +26,22 @@ var cacheMaxBytes = flag.Int64("cacheMaxBytes", 64<<20, "Maximum cache size in b
 var cacheMaxObjectBytes = flag.Int64("cacheMaxObjectBytes", 8<<20, "Maximum cached object size in bytes")
 var runtimeStatsInterval = flag.Duration("runtimeStatsInterval", 10*time.Second, "Interval for runtime statistics logs; 0 disables logging")
 var accessLogEvery = flag.Uint64("accessLogEvery", 1, "Log one request for every N requests; 0 disables access logs")
+var logFile = flag.String("logFile", "", "File to append logs to in addition to stderr; empty disables file output")
+var logMaxBytes = flag.Int64("logMaxBytes", 128<<20, "Maximum size of one log file before rotation")
+var logBackups = flag.Int("logBackups", 3, "Number of rotated log files to keep")
 
 func main() {
 	flag.Parse()
+	var logFileCloser io.Closer
+	if *logFile != "" {
+		writer, err := configureLogFile(*logFile, *logMaxBytes, *logBackups)
+		if err != nil {
+			log.Fatalf("Failed to configure log file: %v", err)
+		}
+		log.SetOutput(io.MultiWriter(os.Stderr, writer))
+		logFileCloser = writer
+		defer logFileCloser.Close()
+	}
 
 	originURL, err := url.Parse(*originURLStr)
 	if err != nil {
