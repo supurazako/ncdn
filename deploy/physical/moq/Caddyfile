@@ -1,0 +1,14 @@
+{$GUI_DOMAIN:moq.supurazako.com} {
+  root * /srv
+  encode zstd gzip
+
+  handle /api/* {
+    uri strip_prefix /api
+    reverse_proxy router:8080
+  }
+
+  handle {
+    try_files {path} /index.html
+    file_server
+  }
+}

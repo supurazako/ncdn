@@ -1,81 +1,90 @@
-# MoQ direct CDN experiment
+# MoQ multi-channel CDN
 
-`moq-dev/moq`を使い、ブラウザがRelayからMoQを直接受信するPoP実験環境。
+`moq-dev/moq`を使い、複数のライブchannelをOrigin RelayからEdge Relayへ配送し、ブラウザが選択したEdgeからMoQを直接受信する実験環境。
 
 ```text
-FFmpeg -> SRT -> moq-cli publisher -> moq-relay -> Browser
-                                      [Group cache]  [WebTransport + WebCodecs]
+FFmpeg -> moq-cli -> Origin Relay
+                         │ Relay cluster
+                 ┌───────┴───────┐
+              Edge C0         Edge C1
+                 └───────┬───────┘
+                      L4LB VIP
+                         ↑ WebTransport + QUIC
+                      Browser
 ```
 
-HLSへの変換は行わない。ブラウザは`@moq/watch`でMoQをSUBSCRIBEし、WebTransport上のQUICで受信した映像をWebCodecsでデコードしてcanvasへ描画する。
+HTTP CDNではL7LB/Cacheとして動くC0/C1を、MoQではEdge Relayとして兼用できる。HTTP response cacheとMoQ Group cacheはデータ形式が異なるため別々に持つ。
 
-## 何を検証するか
+## 実装内容
 
-- PublisherからRelayへライブ映像を配信できる
-- ブラウザがRelayへ直接WebTransport接続できる
-- HLS segmentの完成を待たず、MoQのライブTrackをSUBSCRIBEできる
-- WebCodecsでH.264をデコードしてリアルタイム描画できる
-- Relayに完了済みGroupを保持し、今後のDVR `FETCH`実装に利用できる
+- `motion.hang`と`bars.hang`の2つのbroadcast
+- channel catalog API (`GET /channels`)
+- 共通VIPへ接続するclient設定API (`GET /config`)
+- 振り分け比較用のRendezvous Router API (`GET /route`)
+- C0/C1のRelay clusterと、track単位の上流購読集約
+- GUIからchannelを切り替え、共通VIPへWebTransport接続
+- 30秒・128MBのMoQ Group cache
+- Edge Cacheの過去Groupを使う「10秒戻る」と「LIVEへ戻る」
+- Raspberry Piと既存C0/C1へ分けて配置できるdeploy bundle
 
 ## 固定バージョン
 
 - `moqdev/moq-relay:0.14.9`
 - `moqdev/moq-cli:0.9.9`
 - `@moq/watch:0.4.5`
-- `jrottenberg/ffmpeg:7.1-alpine`
+- Raspberry Pi実機ではDebian bookwormのFFmpeg
 
-以前のcloudflare/moq-rs draft-14構成は`feature/moq-cdn-spike`ブランチに残している。
-
-## 起動
+## ローカル起動
 
 ```sh
 cd moq-cdn
-docker compose up -d --remove-orphans
+docker compose up -d --build --remove-orphans
 ```
 
-ブラウザとサーバが同じホストなら次を開く。
+ブラウザで次を開く。
 
 ```text
 http://localhost:3002
 ```
 
-Tailscale経由ならサーバのTailscale IPを使う。
+別ホストから開く場合、Routerが返すEdge URLもそのホストから到達可能にする。
+
+```sh
+EDGE_C0_PUBLIC_URL=http://192.168.20.11:4443 \
+EDGE_C1_PUBLIC_URL=http://192.168.20.9:4444 \
+docker compose up -d --build --remove-orphans
+```
+
+GUIの`CHANNEL` selectorで映像を切り替える。ブラウザは常に共通VIPへ接続し、L4LBがQUIC flowをC0/C1へ固定する。
+
+URLの`relay` queryを指定するとRouterを迂回して手動のRelayへ接続できる。
 
 ```text
-http://100.94.113.55:3002
+http://localhost:3002/?relay=192.168.20.11
 ```
 
-GUIは表示中のホスト名をRelayにも利用し、`http://<host>:4443/`を`@moq/watch`へ渡す。Publisherと同じRelay rootで`demo.hang`をSUBSCRIBEする。開発環境ではライブラリが`/certificate.sha256`を取得して自己署名証明書をpinし、実際のメディアはWebTransport/QUICで受信する。
+WebSocket fallbackは無効化している。QUICが確立しない場合はGUIとConsoleに接続エラーを出す。
 
-この実験ではWebSocket fallbackを無効にしている。QUICが確立しない場合にTCPで動作を継続せず、GUIとConsoleに接続エラーを出す。
+## 配布物
 
-別のRelayを指定する場合：
-
-```text
-http://localhost:3002/?relay=100.94.113.55
+```sh
+make GOARCH=arm64 deploy-moq
 ```
 
-SSHの`-L`はTCPしか転送しないため、GUIのHTMLは見えてもWebTransportのQUIC/UDPは運べない。リモートRelayの確認にはTailscaleなどUDPが到達する経路を使う。
+次のdirectoryが生成される。
 
-## キャッシュ設定
+- `dist/linux-arm64/moq-publisher`: Raspberry Pi向けPublisher + Origin Relay + GUI
+- `dist/linux-arm64/moq-edge`: C0/C1へ追加するEdge Relay用（Composeと共通証明書生成手順）
 
-`moqdev/relay.toml`で設定する。
+実機手順は各directoryの`README.md`を参照する。
 
-```toml
-[cache]
-capacity = "128MB"
-duration = "30s"
-```
-
-直接プレイヤーは現在ライブSUBSCRIBEのみを利用する。キャッシュは次の段階で、過去GroupをFETCHして再生し、ライブ端でSUBSCRIBEへ切り替えるDVR機能に使う。
-
-## 自動検証
+## 検証
 
 ```sh
 ./verify-observability.sh
 ```
 
-自動検証はコンテナ、Relayのfingerprint endpoint、GUI、直接プレイヤー設定、PublisherからRelayへの配信を確認する。WebTransportとWebCodecsはブラウザAPIなので、最終確認はChromeのGUIで行う。
+自動検証では、2つのbroadcast、Relay cluster、channel catalog、Router、GUIを確認する。WebTransportとWebCodecsの最終確認はChromeで行う。
 
 停止：
 

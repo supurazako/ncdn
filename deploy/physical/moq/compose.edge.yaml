@@ -1,0 +1,19 @@
+name: ncdn-moq-edge
+
+services:
+  relay:
+    image: moqdev/moq-relay:0.14.9
+    command: /config/relay.toml
+    environment:
+      MOQ_CLUSTER_CONNECT: ${MOQ_ORIGIN_URL:?set MOQ_ORIGIN_URL in .env}
+      MOQ_CLUSTER_ID: ${MOQ_CLUSTER_ID:?set a unique MOQ_CLUSTER_ID in .env}
+      MOQ_STATS_NODE: ${MOQ_EDGE_ID:?set MOQ_EDGE_ID in .env}
+      MOQ_SERVER_TLS_CERT: /certs/relay.crt
+      MOQ_SERVER_TLS_KEY: /certs/relay.key
+    network_mode: host
+    mem_limit: ${MOQ_EDGE_MEMORY_LIMIT:-512m}
+    cpus: ${MOQ_EDGE_CPUS:-1.0}
+    volumes:
+      - ./relay.toml:/config/relay.toml:ro
+      - ./certs:/certs:ro
+    restart: unless-stopped

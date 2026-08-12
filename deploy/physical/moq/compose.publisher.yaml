@@ -1,0 +1,81 @@
+name: ncdn-moq-publisher
+
+services:
+  origin-relay:
+    image: moqdev/moq-relay:0.14.9
+    command: /config/relay.toml
+    environment:
+      MOQ_CLUSTER_ID: ${MOQ_CLUSTER_ID:-90}
+      MOQ_STATS_NODE: origin
+      MOQ_SERVER_TLS_GENERATE: origin-relay
+    ports:
+      - "${MOQ_LAN_IP:?set MOQ_LAN_IP in .env}:4443:4443/udp"
+      - "${MOQ_LAN_IP}:4443:4443/tcp"
+    volumes:
+      - ./relay.toml:/config/relay.toml:ro
+    restart: unless-stopped
+
+  publisher-motion:
+    image: moqdev/moq-cli:0.9.9
+    command: ["--client-connect", "http://origin-relay:4443", "--broadcast", "motion.hang", "import", "srt", "--listen", "[::]:9000"]
+    depends_on: [origin-relay]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9000:9000/udp"
+
+  source-motion:
+    build:
+      context: .
+      dockerfile: ffmpeg.Dockerfile
+    command: ["-hide_banner", "-loglevel", "warning", "-re", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=20", "-vf", "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='CHANNEL A  %{pts\\:hms}':fontcolor=white:fontsize=28:box=1:boxcolor=black@0.6:x=24:y=24", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-g", "40", "-keyint_min", "40", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-f", "mpegts", "srt://publisher-motion:9000?mode=caller&streamid=motion"]
+    depends_on: [publisher-motion]
+    restart: unless-stopped
+
+  publisher-bars:
+    image: moqdev/moq-cli:0.9.9
+    command: ["--client-connect", "http://origin-relay:4443", "--broadcast", "bars.hang", "import", "srt", "--listen", "[::]:9001"]
+    depends_on: [origin-relay]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9001:9001/udp"
+
+  source-bars:
+    build:
+      context: .
+      dockerfile: ffmpeg.Dockerfile
+    command: ["-hide_banner", "-loglevel", "warning", "-re", "-f", "lavfi", "-i", "smptebars=size=640x360:rate=20", "-vf", "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='CHANNEL B  %{pts\\:hms}':fontcolor=white:fontsize=28:box=1:boxcolor=black@0.6:x=24:y=24", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-g", "40", "-keyint_min", "40", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-f", "mpegts", "srt://publisher-bars:9001?mode=caller&streamid=bars"]
+    depends_on: [publisher-bars]
+    restart: unless-stopped
+
+  router:
+    image: alpine:3.22
+    command: /app/moq-router
+    environment:
+      EDGES: "edge-c0=http://192.168.20.11:4443,edge-c1=http://192.168.20.9:4443"
+      CHANNELS: "motion=motion.hang,bars=bars.hang"
+      PUBLIC_MOQ_URL: "https://219.100.95.113:4443"
+      PUBLIC_MOQ_CERTIFICATE_SHA256: ${MOQ_EDGE_CERTIFICATE_SHA256:?set MOQ_EDGE_CERTIFICATE_SHA256 in .env}
+      CACHE_RETENTION_SECONDS: 30
+      GROUP_DURATION_SECONDS: 2
+    volumes:
+      - ./moq-router:/app/moq-router:ro
+    restart: unless-stopped
+
+  gui:
+    image: caddy:2.10-alpine
+    environment:
+      GUI_DOMAIN: ${GUI_DOMAIN:-moq.supurazako.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./visualizer:/srv:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [router]
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

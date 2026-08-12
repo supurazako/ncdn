@@ -3,7 +3,6 @@ level = "info"
 
 [server]
 bind = "[::]:4443"
-tls.generate = ["localhost", "relay"]
 
 [web.http]
 listen = "[::]:4443"
@@ -17,4 +16,3 @@ duration = "30s"
 
 [stats]
 enabled = true
-node = "edge-c0"

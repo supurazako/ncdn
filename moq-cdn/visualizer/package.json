@@ -1,0 +1,15 @@
+{
+  "name": "ncdn-moq-visualizer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test rewind.test.js"
+  },
+  "dependencies": {
+    "@moq/watch": "0.4.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.8"
+  }
+}

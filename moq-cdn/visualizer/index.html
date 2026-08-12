@@ -19,31 +19,31 @@
     <section class="player-panel panel">
       <div class="panel-heading">
         <div>
-          <p class="label">DIRECT MOQ LIVE TRACK</p>
-          <h2>demo.hang</h2>
+          <p class="label">MOQ LIVE CHANNEL</p>
+          <h2 id="channel-title">catalog loading</h2>
         </div>
-        <div id="player-state" class="pill">waiting</div>
+        <div class="channel-controls">
+          <label for="channel-select">CHANNEL</label>
+          <select id="channel-select"></select>
+          <div id="player-state" class="pill">waiting</div>
+        </div>
       </div>
       <div class="video-frame">
-        <moq-watch-ui id="moq-player-ui">
-          <moq-watch
-            id="moq-player"
-            name="demo.hang"
-            muted
-            visible="always"
-            latency="real-time">
-            <canvas></canvas>
-          </moq-watch>
-        </moq-watch-ui>
+        <div id="player-mount"></div>
         <div id="video-placeholder" class="video-placeholder">
           <div class="spinner"></div>
           <p>Connecting directly to MoQ...</p>
           <small id="transport-endpoint">Relay endpointを決定中...</small>
         </div>
       </div>
+      <div class="playback-controls">
+        <button id="rewind-10" type="button" disabled>↶ 10秒戻る</button>
+        <button id="return-live" type="button" disabled>● LIVEへ戻る</button>
+        <span id="playback-position">LIVE位置を取得中</span>
+      </div>
       <div class="transport-strip">
         <span>MoQ → WebTransport → WebCodecs</span>
-        <span>H.264 · 960×540 · 30fps · GOP 2s</span>
+        <span>H.264 · 640×360 · 20fps · GOP 2s</span>
         <span id="last-frame">Waiting for frame</span>
       </div>
     </section>
@@ -67,12 +67,12 @@
         <div class="link" id="publish-link">
           <span class="flow-dot"></span>
           <b>MOQT</b>
-          <small>publish demo.hang</small>
+          <small>publish <span id="broadcast-name">selecting</span></small>
         </div>
 
         <article class="node relay" id="origin-node">
           <div class="node-icon relay-icon">R</div>
-          <div><strong>MoQ Relay</strong><small>30s Group history cache</small></div>
+          <div><strong>MoQ Edge Relay</strong><small><span id="edge-name">selecting</span> · 30s Group cache</small></div>
           <i></i>
         </article>
 
@@ -90,7 +90,7 @@
       </div>
 
       <div class="metrics-grid">
-        <article><span>Delivery</span><strong>SUB</strong></article>
+        <article><span>Entry</span><strong>VIP</strong></article>
         <article><span>Transport</span><strong>QUIC</strong></article>
         <article><span>Decode</span><strong>WebCodecs</strong></article>
         <article><span>Target</span><strong>real-time</strong></article>

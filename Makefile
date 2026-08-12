@@ -14,7 +14,7 @@ help: ## 利用可能なtargetを表示する
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: deploy
-deploy: deploy-l4lb deploy-l7lb deploy-origin ## Linux amd64向けの全roleをビルドする
+deploy: deploy-l4lb deploy-l7lb deploy-origin deploy-moq ## Linux amd64向けの全roleをビルドする
 
 .PHONY: deploy-l4lb
 deploy-l4lb: ## L4LB本体とfull版XDP objectをビルドする
@@ -42,6 +42,23 @@ deploy-origin: ## Origin serverをビルドする
 	$(GO_BUILD) -o "$(DIST_ROOT)/origin/origin" ./origin
 	cp -R origin/templates origin/static "$(DIST_ROOT)/origin/"
 	cp deploy/physical/origin/README.md "$(DIST_ROOT)/origin/README.md"
+
+.PHONY: deploy-moq
+deploy-moq: ## Publisher/Edge分離構成のMoQ CDNをビルドする
+	@mkdir -p "$(DIST_ROOT)/moq-edge" "$(DIST_ROOT)/moq-publisher/visualizer/vendor"
+	$(GO_BUILD) -o "$(DIST_ROOT)/moq-publisher/moq-router" ./moq-cdn/router
+	cd moq-cdn/visualizer && npm ci
+	MOQ_VISUALIZER_OUTDIR="$(CURDIR)/$(DIST_ROOT)/moq-publisher/visualizer/vendor" npm --prefix moq-cdn/visualizer run build
+	cp deploy/physical/moq/compose.edge.yaml "$(DIST_ROOT)/moq-edge/compose.edge.yaml"
+	cp deploy/physical/moq/compose.publisher.yaml "$(DIST_ROOT)/moq-publisher/compose.publisher.yaml"
+	cp deploy/physical/moq/README.md "$(DIST_ROOT)/moq-edge/README.md"
+	cp deploy/physical/moq/README.md "$(DIST_ROOT)/moq-publisher/README.md"
+	cp moq-cdn/moqdev/relay.toml "$(DIST_ROOT)/moq-edge/relay.toml"
+	cp moq-cdn/moqdev/relay.toml "$(DIST_ROOT)/moq-publisher/relay.toml"
+	cp deploy/physical/moq/generate-edge-cert.sh "$(DIST_ROOT)/moq-edge/generate-edge-cert.sh"
+	cp deploy/physical/moq/Caddyfile deploy/physical/moq/ffmpeg.Dockerfile "$(DIST_ROOT)/moq-publisher/"
+	cp moq-cdn/visualizer/index.html moq-cdn/visualizer/app.js moq-cdn/visualizer/bootstrap.js moq-cdn/visualizer/rewind.js moq-cdn/visualizer/style.css "$(DIST_ROOT)/moq-publisher/visualizer/"
+	chmod +x "$(DIST_ROOT)/moq-edge/generate-edge-cert.sh"
 
 .PHONY: l4lb-variants
 l4lb-variants: ## 性能比較用の全XDP variantをビルドする
