@@ -30,7 +30,11 @@ deploy-l4lb: ## L4LB本体とfull版XDP objectをビルドする
 deploy-l7lb: ## L7LB兼cache serverをビルドする
 	@mkdir -p "$(DIST_ROOT)/l7lb"
 	$(GO_BUILD) -o "$(DIST_ROOT)/l7lb/l7lb" ./popcache
-	cp deploy/physical/l7lb/README.md "$(DIST_ROOT)/l7lb/README.md"
+	cp deploy/physical/l7lb/README.md \
+		deploy/physical/l7lb/ncdn-l7lb.service \
+		deploy/physical/l7lb/ncdn-l7lb.default.example \
+		deploy/physical/l7lb/journald-persistent.conf.example \
+		"$(DIST_ROOT)/l7lb/"
 
 .PHONY: deploy-origin
 deploy-origin: ## Origin serverをビルドする

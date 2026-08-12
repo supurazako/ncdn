@@ -1,0 +1,18 @@
+[Unit]
+Description=ncdn L7LB and cache server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/ncdn-l7lb
+ExecStart=/opt/ncdn/l7lb/l7lb -nodeId ${NCDN_NODE_ID} -listenAddr ${NCDN_LISTEN_ADDR} -originURL ${NCDN_ORIGIN_URL} -cacheTTL ${NCDN_CACHE_TTL} -cacheMaxBytes ${NCDN_CACHE_MAX_BYTES} -cacheMaxObjectBytes ${NCDN_CACHE_MAX_OBJECT_BYTES} -runtimeStatsInterval ${NCDN_RUNTIME_STATS_INTERVAL} -accessLogEvery ${NCDN_ACCESS_LOG_EVERY}
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

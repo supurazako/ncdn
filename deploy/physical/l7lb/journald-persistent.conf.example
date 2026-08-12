@@ -1,0 +1,5 @@
+[Journal]
+Storage=persistent
+Compress=yes
+SystemMaxUse=512M
+MaxRetentionSec=7day
