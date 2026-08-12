@@ -22,6 +22,8 @@ var nodeId = flag.String("nodeId", "unknown_node", "Name of the node")
 var cacheTTL = flag.Duration("cacheTTL", 30*time.Second, "Cache entry TTL")
 var cacheMaxBytes = flag.Int64("cacheMaxBytes", 64<<20, "Maximum cache size in bytes")
 var cacheMaxObjectBytes = flag.Int64("cacheMaxObjectBytes", 8<<20, "Maximum cached object size in bytes")
+var runtimeStatsInterval = flag.Duration("runtimeStatsInterval", 10*time.Second, "Interval for runtime statistics logs; 0 disables logging")
+var accessLogEvery = flag.Uint64("accessLogEvery", 1, "Log one request for every N requests; 0 disables access logs")
 
 func main() {
 	flag.Parse()
@@ -36,22 +38,31 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid cache size: %v", err)
 	}
+	if *runtimeStatsInterval < 0 {
+		log.Fatalf("Invalid runtime statistics interval: %s", *runtimeStatsInterval)
+	}
 
 	mux := http.NewServeMux()
 	rps := httprps.NewMiddleware(mux)
-	http.Handle("/", rps)
+	requests := &requestStats{logEvery: *accessLogEvery}
+	handler := requests.middleware(rps)
+	startRuntimeStatsLogger(*runtimeStatsInterval, start, *nodeId, requests, cache)
 
 	mux.HandleFunc("/statusz", func(w http.ResponseWriter, r *http.Request) {
 		s := struct {
 			types.PoPStatus
-			Cache cacheStats `json:"cache"`
+			Cache    cacheStats           `json:"cache"`
+			Requests requestStatsSnapshot `json:"requests"`
+			Runtime  runtimeStatsSnapshot `json:"runtime"`
 		}{
 			PoPStatus: types.PoPStatus{
 				Id:     *nodeId,
 				Uptime: time.Since(start).Seconds(),
 				Load:   rps.GetRPS(),
 			},
-			Cache: cache.stats(),
+			Cache:    cache.stats(),
+			Requests: requests.snapshot(),
+			Runtime:  readRuntimeStats(),
 		}
 		bs, err := json.MarshalIndent(s, "", "  ")
 		if err != nil {
@@ -81,11 +92,11 @@ func main() {
 		if *http3CertFile == "" || *http3KeyFile == "" {
 			log.Fatal("-http3CertFile and -http3KeyFile are required when HTTP/3 is enabled")
 		}
-		go serveHTTP3(*http3ListenAddr, *http3CertFile, *http3KeyFile, mux)
+		go serveHTTP3(*http3ListenAddr, *http3CertFile, *http3KeyFile, handler)
 	}
 
 	log.Printf("Listening on %s...", *listenAddr)
-	if err := http.ListenAndServe(*listenAddr, nil); err != nil {
+	if err := http.ListenAndServe(*listenAddr, handler); err != nil {
 		log.Fatal(err)
 	}
 }
