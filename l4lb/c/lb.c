@@ -87,7 +87,22 @@ struct lb_config { /* go: */
   uint8_t padding[2];
   uint32_t num_dests;
   uint32_t inner_mtu;
+  uint32_t selection_algorithm;
 };
+
+#define SELECTION_ALGORITHM_MODULO 0 /* go: */
+#define SELECTION_ALGORITHM_RENDEZVOUS 1 /* go: */
+#define SELECTION_ALGORITHM_MAGLEV 2 /* go: */
+
+// A prime-sized table gives every Maglev backend permutation a full cycle.
+#define MAGLEV_LOOKUP_SIZE 65537 /* go: */
+
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(max_entries, MAGLEV_LOOKUP_SIZE);
+  __type(key, uint32_t);
+  __type(value, uint32_t);
+} selection_lookup_map SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -168,14 +183,58 @@ struct tcp_ports {
   uint16_t dest;
 } PACKED;
 
-static __always_inline uint32_t select_destination(uint32_t key,
-                                                    uint32_t num_dests) {
+static __always_inline uint32_t mix32(uint32_t value) {
+  value ^= value >> 16;
+  value *= 0x85ebca6b;
+  value ^= value >> 13;
+  value *= 0xc2b2ae35;
+  value ^= value >> 16;
+  return value;
+}
+
+static __always_inline uint32_t flow_hash_ipv4(uint32_t client_address,
+                                               uint16_t client_port,
+                                               uint16_t service_port) {
+  uint32_t ports = ((uint32_t)client_port << 16) | service_port;
+  return mix32(client_address ^ ports);
+}
+
+static __always_inline uint32_t flow_hash_ipv6(struct in6_addr* client_address,
+                                               uint16_t client_port,
+                                               uint16_t service_port) {
+  uint32_t ports = ((uint32_t)client_port << 16) | service_port;
+  uint32_t folded = client_address->s6_addr32[0] ^
+                    client_address->s6_addr32[1] ^
+                    client_address->s6_addr32[2] ^
+                    client_address->s6_addr32[3] ^ ports;
+  return mix32(folded);
+}
+
+static __always_inline uint32_t select_destination(
+    uint32_t flow_hash, struct lb_config* config) {
+  uint32_t num_dests = config->num_dests;
+  if (num_dests == 0) {
+    return 0;
+  }
+
+  // Rendezvous and Maglev differ in how the control plane constructs this
+  // table. The XDP hot path is a single lookup for both algorithms.
+  if (config->selection_algorithm == SELECTION_ALGORITHM_RENDEZVOUS ||
+      config->selection_algorithm == SELECTION_ALGORITHM_MAGLEV) {
+    uint32_t slot = flow_hash % MAGLEV_LOOKUP_SIZE;
+    uint32_t* selected = bpf_map_lookup_elem(&selection_lookup_map, &slot);
+    if (!selected || *selected == 0 || *selected > num_dests) {
+      return 0;
+    }
+    return *selected;
+  }
+
 #if L4LB_POW2_DESTS
   if ((num_dests & (num_dests - 1)) == 0) {
-    return (key & (num_dests - 1)) + 1;
+    return (flow_hash & (num_dests - 1)) + 1;
   }
 #endif
-  return (key % num_dests) + 1;
+  return (flow_hash % num_dests) + 1;
 }
 
 #if !L4LB_MINIMAL && !L4LB_L2_DSR
@@ -390,7 +449,7 @@ int lb_main(struct xdp_md* ctx) {
       EXIT(XDP_DROP);
     }
     struct tcphdr* tcp = (void*)(ip4 + 1);
-    key = ip4->saddr + tcp->source;
+    key = flow_hash_ipv4(ip4->saddr, tcp->source, tcp->dest);
     inner_len = ntohs(ip4->tot_len);
     ip_version = 4;
   } else if (eth->h_proto == htons(ETH_P_IPV6)) {
@@ -411,8 +470,7 @@ int lb_main(struct xdp_md* ctx) {
       EXIT(XDP_DROP);
     }
     struct tcphdr* tcp = (void*)(ip6 + 1);
-    key = ip6->saddr.s6_addr32[0] ^ ip6->saddr.s6_addr32[1] ^
-          ip6->saddr.s6_addr32[2] ^ ip6->saddr.s6_addr32[3] ^ tcp->source;
+    key = flow_hash_ipv6(&ip6->saddr, tcp->source, tcp->dest);
     inner_len = sizeof(struct ipv6hdr) + ntohs(ip6->payload_len);
     ip_version = 6;
   } else {
@@ -424,7 +482,10 @@ int lb_main(struct xdp_md* ctx) {
     EXIT(XDP_DROP);
   }
 
-  uint32_t dest_idx = select_destination(key, config->num_dests);
+  uint32_t dest_idx = select_destination(key, config);
+  if (dest_idx == 0) {
+    EXIT(XDP_DROP);
+  }
   struct destination_entry* dest =
       bpf_map_lookup_elem(&destinations_map, &dest_idx);
   if (!dest) {
@@ -537,7 +598,7 @@ int lb_main(struct xdp_md* ctx) {
       }
 
       struct tcphdr* tcp = (struct tcphdr*)(ip4 + 1);
-      key = ip4->saddr + tcp->source;
+      key = flow_hash_ipv4(ip4->saddr, tcp->source, tcp->dest);
       minimum_inner_len = sizeof(struct iphdr) + sizeof(struct tcphdr);
       debugk("incoming IPv4 packet: ip=%pI4 port=%u", &ip4->saddr,
              ntohs(tcp->source));
@@ -567,7 +628,8 @@ int lb_main(struct xdp_md* ctx) {
         EXIT(XDP_DROP);
       }
       struct tcp_ports* quoted_tcp = (void*)(quoted_ip4 + 1);
-      key = quoted_ip4->daddr + quoted_tcp->dest;
+      key = flow_hash_ipv4(quoted_ip4->daddr, quoted_tcp->dest,
+                           quoted_tcp->source);
       minimum_inner_len = sizeof(struct iphdr) +
                           sizeof(struct icmp_error_header) +
                           sizeof(struct iphdr) + sizeof(struct tcp_ports);
@@ -612,8 +674,7 @@ int lb_main(struct xdp_md* ctx) {
       }
 
       struct tcphdr* tcp = (struct tcphdr*)(ip6 + 1);
-      key = ip6->saddr.s6_addr32[0] ^ ip6->saddr.s6_addr32[1] ^
-            ip6->saddr.s6_addr32[2] ^ ip6->saddr.s6_addr32[3] ^ tcp->source;
+      key = flow_hash_ipv6(&ip6->saddr, tcp->source, tcp->dest);
       minimum_inner_len = sizeof(struct ipv6hdr) + sizeof(struct tcphdr);
       debugk("incoming IPv6 packet: port=%u", ntohs(tcp->source));
     } else if (ip6->nexthdr == IPPROTO_ICMPV6) {
@@ -645,10 +706,8 @@ int lb_main(struct xdp_md* ctx) {
         EXIT(XDP_DROP);
       }
       struct tcp_ports* quoted_tcp = (void*)(quoted_ip6 + 1);
-      key = quoted_ip6->daddr.s6_addr32[0] ^
-            quoted_ip6->daddr.s6_addr32[1] ^
-            quoted_ip6->daddr.s6_addr32[2] ^
-            quoted_ip6->daddr.s6_addr32[3] ^ quoted_tcp->dest;
+      key = flow_hash_ipv6(&quoted_ip6->daddr, quoted_tcp->dest,
+                           quoted_tcp->source);
       minimum_inner_len = sizeof(struct ipv6hdr) +
                           sizeof(struct icmp_error_header) +
                           sizeof(struct ipv6hdr) + sizeof(struct tcp_ports);
@@ -695,7 +754,10 @@ int lb_main(struct xdp_md* ctx) {
     EXIT(XDP_DROP);
   }
 
-  uint32_t dest_idx = select_destination(key, config->num_dests);
+  uint32_t dest_idx = select_destination(key, config);
+  if (dest_idx == 0) {
+    EXIT(XDP_DROP);
+  }
 #if L4LB_INLINE_DEST
   if (dest_idx > INLINE_DESTINATIONS_SIZE) {
     EXIT(XDP_DROP);

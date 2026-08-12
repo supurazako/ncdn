@@ -33,6 +33,7 @@ var healthCheckTimeout = flag.Duration("healthCheckTimeout", 300*time.Millisecon
 var healthCheckFailures = flag.Int("healthCheckFailures", 3, "Consecutive health check failures before removing a cache destination")
 var healthCheckSuccesses = flag.Int("healthCheckSuccesses", 2, "Consecutive health check successes before restoring a cache destination")
 var healthCheckPort = flag.Uint("healthCheckPort", 8889, "Cache destination health check port")
+var selectionAlgorithm = flag.String("selectionAlgorithm", "modulo", "Backend selection algorithm: modulo, rendezvous, or maglev")
 
 func parseDest(deststr string) ([]l4lbdrv.DestinationEntry, error) {
 	commas := strings.Split(deststr, ",")
@@ -104,18 +105,24 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to parse dest string: %v", err)
 	}
+	algorithm, err := l4lbdrv.ParseSelectionAlgorithm(*selectionAlgorithm)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	cfg := &l4lbdrv.Config{
-		BinPath:        *lbBin,
-		XdpCapHookPath: *xdpcapHookPath,
-		InterfaceName:  *xdpif,
-		XDPMode:        l4lbdrv.XDPMode(*xdpMode),
-		UnderlayMTU:    uint32(*underlayMTU),
-		VIP4:           netip.MustParseAddr(*vip4),
-		VIP6:           netip.MustParseAddr(*vip6),
-		Dests:          dests,
+		BinPath:            *lbBin,
+		XdpCapHookPath:     *xdpcapHookPath,
+		InterfaceName:      *xdpif,
+		XDPMode:            l4lbdrv.XDPMode(*xdpMode),
+		UnderlayMTU:        uint32(*underlayMTU),
+		VIP4:               netip.MustParseAddr(*vip4),
+		VIP6:               netip.MustParseAddr(*vip6),
+		Dests:              dests,
+		SelectionAlgorithm: algorithm,
 	}
-	slog.Info("Selected L4LB variant", "variant", *variant, "object", *lbBin)
+	slog.Info("Selected L4LB variant", "variant", *variant, "object", *lbBin,
+		"selectionAlgorithm", algorithm)
 	lb, err := l4lbdrv.New(cfg)
 	if err != nil {
 		log.Panicf("Failed to create l4lb instance: %v", err)

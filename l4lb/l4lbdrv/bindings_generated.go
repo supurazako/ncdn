@@ -12,28 +12,32 @@ import (
 // Source: ../c/lb.c
 
 const (
-	DESTINATIONS_SIZE = 255 // ../c/lb.c:98
+	SELECTION_ALGORITHM_MODULO     = 0     // ../c/lb.c:93
+	SELECTION_ALGORITHM_RENDEZVOUS = 1     // ../c/lb.c:94
+	SELECTION_ALGORITHM_MAGLEV     = 2     // ../c/lb.c:95
+	MAGLEV_LOOKUP_SIZE             = 65537 // ../c/lb.c:98
+	DESTINATIONS_SIZE              = 255   // ../c/lb.c:138
 )
 
-type StatCounters struct { // ../c/lb.c:42
-	RxPacketTotal                 uint64 // ../c/lb.c:43
-	RxTotalSize                   uint64 // ../c/lb.c:44
-	TooShortPacketTotal           uint64 // ../c/lb.c:46
-	UnsupportedNetworkPacketTotal uint64 // ../c/lb.c:47
-	Ipv4PacketTotal               uint64 // ../c/lb.c:48
-	Ipv6PacketTotal               uint64 // ../c/lb.c:49
-	IpOptionPacketTotal           uint64 // ../c/lb.c:50
-	NonSupportedProtoPacketTotal  uint64 // ../c/lb.c:51
-	NoVipMatchTotal               uint64 // ../c/lb.c:52
-	NoHealthyDestinationTotal     uint64 // ../c/lb.c:53
-	MtuExceededPacketTotal        uint64 // ../c/lb.c:54
-	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:55
-	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:56
-	InvalidIcmpErrorTotal         uint64 // ../c/lb.c:57
-	Icmpv4ErrorForwardedTotal     uint64 // ../c/lb.c:58
-	Icmpv6ErrorForwardedTotal     uint64 // ../c/lb.c:59
-	FailedAdjustHeadTotal         uint64 // ../c/lb.c:60
-	FailedAdjustTailTotal         uint64 // ../c/lb.c:61
+type StatCounters struct { // ../c/lb.c:50
+	RxPacketTotal                 uint64 // ../c/lb.c:51
+	RxTotalSize                   uint64 // ../c/lb.c:52
+	TooShortPacketTotal           uint64 // ../c/lb.c:54
+	UnsupportedNetworkPacketTotal uint64 // ../c/lb.c:55
+	Ipv4PacketTotal               uint64 // ../c/lb.c:56
+	Ipv6PacketTotal               uint64 // ../c/lb.c:57
+	IpOptionPacketTotal           uint64 // ../c/lb.c:58
+	NonSupportedProtoPacketTotal  uint64 // ../c/lb.c:59
+	NoVipMatchTotal               uint64 // ../c/lb.c:60
+	NoHealthyDestinationTotal     uint64 // ../c/lb.c:61
+	MtuExceededPacketTotal        uint64 // ../c/lb.c:62
+	Icmpv4FragNeededTotal         uint64 // ../c/lb.c:63
+	Icmpv6PacketTooBigTotal       uint64 // ../c/lb.c:64
+	InvalidIcmpErrorTotal         uint64 // ../c/lb.c:65
+	Icmpv4ErrorForwardedTotal     uint64 // ../c/lb.c:66
+	Icmpv6ErrorForwardedTotal     uint64 // ../c/lb.c:67
+	FailedAdjustHeadTotal         uint64 // ../c/lb.c:68
+	FailedAdjustTailTotal         uint64 // ../c/lb.c:69
 }
 
 func StatCountersAssertLayout(s *DWARFStruct) error {
@@ -229,14 +233,15 @@ func (c *StatCounters) String() string {
 	return buf.String()
 }
 
-type LbConfig struct { // ../c/lb.c:74
-	Vip4Address   uint32    // ../c/lb.c:75
-	Vip6Address   [16]uint8 // ../c/lb.c:76
-	SrcIp6Address [16]uint8 // ../c/lb.c:77
-	SrcMacAddress [6]uint8  // ../c/lb.c:78
-	Padding       [2]uint8  // ../c/lb.c:79
-	NumDests      uint32    // ../c/lb.c:80
-	InnerMtu      uint32    // ../c/lb.c:81
+type LbConfig struct { // ../c/lb.c:82
+	Vip4Address        uint32    // ../c/lb.c:83
+	Vip6Address        [16]uint8 // ../c/lb.c:84
+	SrcIp6Address      [16]uint8 // ../c/lb.c:85
+	SrcMacAddress      [6]uint8  // ../c/lb.c:86
+	Padding            [2]uint8  // ../c/lb.c:87
+	NumDests           uint32    // ../c/lb.c:88
+	InnerMtu           uint32    // ../c/lb.c:89
+	SelectionAlgorithm uint32    // ../c/lb.c:90
 }
 
 func LbConfigAssertLayout(s *DWARFStruct) error {
@@ -287,6 +292,11 @@ func LbConfigAssertLayout(s *DWARFStruct) error {
 	doff = fs["inner_mtu"].Offset
 	if goff != uintptr(doff) {
 		return fmt.Errorf("offset mismatch: go InnerMtu: %d, dwarf inner_mtu: %d", goff, doff)
+	}
+	goff = unsafe.Offsetof(LbConfig{}.SelectionAlgorithm)
+	doff = fs["selection_algorithm"].Offset
+	if goff != uintptr(doff) {
+		return fmt.Errorf("offset mismatch: go SelectionAlgorithm: %d, dwarf selection_algorithm: %d", goff, doff)
 	}
 
 	return nil
